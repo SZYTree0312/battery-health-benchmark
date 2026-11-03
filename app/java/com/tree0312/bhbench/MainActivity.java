@@ -292,46 +292,12 @@ public class MainActivity extends Activity {
             return;
         }
 
-        Analyzer.Report r = Analyzer.analyze(latest, design);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(latest.getName()).append("\n");
-        sb.append("────────────────────\n");
-        if (r.samples == 0) {
-            sb.append("没有可用数据\n");
-            for (String w : r.warnings) sb.append("· ").append(w).append("\n");
-            tvResult.setText(sb.toString());
-            return;
-        }
-
-        if (r.reliable) {
-            sb.append(String.format(Locale.US, "等效容量   %.0f mAh%n", r.normalizedMah));
-            sb.append(String.format(Locale.US, "实测原始   %.0f mAh @ %.1f°C%n",
-                    r.measuredMah, r.avgTemp));
-            sb.append(String.format(Locale.US, "标称容量   %.0f mAh%n", r.designMah));
-            sb.append(String.format(Locale.US, "健康度     %.1f%%   %s%n", r.sohPct(), r.grade));
-        } else {
-            // 样本不足时只说事实，不给健康度 —— 半个小时的短测算出来的百分比会误导人
-            sb.append(String.format(Locale.US, "本次放出   %.0f mAh%n", r.normalizedMah));
-            sb.append(String.format(Locale.US, "实测原始   %.0f mAh @ %.1f°C%n",
-                    r.measuredMah, r.avgTemp));
-            sb.append(String.format(Locale.US, "标称容量   %.0f mAh%n", r.designMah));
-            sb.append("结论       数据不足，无法计算健康度\n");
-        }
-        sb.append(String.format(Locale.US, "放出能量   %.1f Wh%n", r.energyWh));
-        sb.append(String.format(Locale.US, "平均电压   %.2f V%n", r.avgVoltage));
-        sb.append(String.format(Locale.US, "放电时长   %d 分%n", (int) (r.durationS / 60)));
-        sb.append(String.format(Locale.US, "SOC 区间   %d%% → %d%%%n", r.socStart, r.socEnd));
-        sb.append(String.format(Locale.US, "数据来源   %s%n",
-                "counter-delta".equals(r.method) ? "系统库仑计" : "电流积分"));
-        sb.append(String.format(Locale.US, "采样点     %d%n", r.samples));
-
-        if (!r.warnings.isEmpty()) {
-            sb.append("\n注意\n");
-            for (String w : r.warnings) sb.append("· ").append(w).append("\n");
-        }
-
-        tvResult.setText(sb.toString());
+        // 报告交给专门的 ResultActivity 呈现。一次测量的结论值得一屏完整展示，
+        // 而不是塞进主界面的一个 TextView 里堆成文字。
+        Intent intent = new Intent(this, ResultActivity.class);
+        intent.putExtra(ResultActivity.EXTRA_FILE, latest.getAbsolutePath());
+        intent.putExtra(ResultActivity.EXTRA_DESIGN, (double) design);
+        startActivity(intent);
     }
 
     private void toast(String msg) {
