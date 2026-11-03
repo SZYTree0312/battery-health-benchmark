@@ -84,9 +84,9 @@ public class Analyzer {
         List<Row> charge = longestSegment(all, true);
 
         boolean okDischarge = discharge != null && discharge.size() >= 2
-                && usable(discharge, false);
+                && usable(discharge, false) && socOk(discharge, false);
         boolean okCharge = charge != null && charge.size() >= 2
-                && usable(charge, true);
+                && usable(charge, true) && socOk(charge, true);
 
         List<Row> seg;
         if (okDischarge) {
@@ -286,6 +286,20 @@ public class Analyzer {
                 ? lastCounter(seg) - firstCounter(seg)
                 : firstCounter(seg) - lastCounter(seg);
         return q >= 100;
+    }
+
+    /**
+     * SOC 跨度够不够。这一段决定「用哪种方式出结论」：
+     * 从 100% 用到 15% 再充满，放电段结束在 15% 不算完整，
+     * 但充电段覆盖 15%→100%，反而是合格的那一条。
+     */
+    private static boolean socOk(List<Row> seg, boolean charge) {
+        int start = Math.round((float) seg.get(0).soc);
+        int end = Math.round((float) seg.get(seg.size() - 1).soc);
+        if (charge) {
+            return (end - start) >= MIN_CHARGE_SPAN && end >= 95;
+        }
+        return start >= 95 && end <= 10;
     }
 
     private static double firstCounter(List<Row> seg) {

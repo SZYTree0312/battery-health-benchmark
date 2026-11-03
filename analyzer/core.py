@@ -208,6 +208,20 @@ def _usable(seg: Optional[Sequence[Sample]], charge: bool) -> bool:
     return delta >= 100
 
 
+def _soc_ok(seg: Optional[Sequence[Sample]], charge: bool) -> bool:
+    """SOC 跨度够不够。
+
+    这一段决定「用哪种方式出结论」：从 100% 用到 15% 再充满，
+    放电段结束在 15% 不算完整，但充电段覆盖 15%→100%，反而是合格的那条。
+    """
+    if seg is None or len(seg) < 2:
+        return False
+    start, end = seg[0].soc_pct, seg[-1].soc_pct
+    if charge:
+        return (end - start) >= 60.0 and end >= 95.0
+    return start >= 95.0 and end <= 10.0
+
+
 def _pick_segment(segments: Iterable[list[Sample]]) -> Optional[list[Sample]]:
     """取最长的一段。一次测量里通常只有一段是完整放电。"""
     best: Optional[list[Sample]] = None
@@ -317,9 +331,9 @@ def analyze(samples: Sequence[Sample], design_mah: float,
     discharge = _pick_segment(_discharge_segments(samples))
     charge = _pick_segment(_charging_segments(samples))
 
-    if _usable(discharge, charge=False):
+    if _usable(discharge, charge=False) and _soc_ok(discharge, charge=False):
         seg, mode = discharge, "discharge"
-    elif _usable(charge, charge=True):
+    elif _usable(charge, charge=True) and _soc_ok(charge, charge=True):
         seg, mode = charge, "charge"
     else:
         # 都不够格：摊最长的一段给用户看，但结论会标"数据不足"

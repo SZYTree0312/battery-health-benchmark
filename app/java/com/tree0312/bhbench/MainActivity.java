@@ -102,8 +102,8 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView hint = new TextView(this);
-        hint.setText("放电测：充满开始，放到自动关机。\n"
-                + "充电测：用到关机，插上充电器过夜，早上看结果。");
+        hint.setText("点开始后就一直记录，中途不要停。\n"
+                + "电量到 15% 左右插上充电器（App 会提醒），充满后点分析最新。");
         hint.setTextSize(12);
         hint.setTextColor(Color.GRAY);
         hint.setLineSpacing(dp(3), 1f);

@@ -43,6 +43,7 @@ public class SamplerService extends Service {
     private static final long DEFAULT_INTERVAL_MS = 5_000L;
 
     private static final int NOTIF_ID = 1001;
+    private static final int NOTIF_ID_ALERT = 1002;
     private static final String CHANNEL_ID = "sampling";
 
     // 供界面读取的运行态。同进程静态字段足够，不必上 Binder。
@@ -59,6 +60,7 @@ public class SamplerService extends Service {
     private long t0;
     private long intervalMs = DEFAULT_INTERVAL_MS;
     private double designMah = 0;
+    private boolean lowBatteryNotified = false;
 
     private final Runnable sampleTask = new Runnable() {
         @Override public void run() {
@@ -108,6 +110,7 @@ public class SamplerService extends Service {
         t0 = System.currentTimeMillis();
         startedAt = t0;
         sampleCount = 0;
+        lowBatteryNotified = false;
 
         File dir = getExternalFilesDir(null);
         if (dir == null) dir = getFilesDir();
@@ -198,6 +201,23 @@ public class SamplerService extends Service {
         lastSoc = soc;
         lastCounterUah = counterUah;
         sampleCount++;
+
+        // 电量低时提醒插电，而不是让用户等到关机。
+        // 关机之后 App 不会自己起来，重启、解锁、再点开始，中间已经充进去几个点了。
+        // 留 10-15% 插电，折算跨度还有 85-90%，误差比"关机重开"小得多。
+        if (!lowBatteryNotified && "discharging".equals(status) && soc > 0 && soc <= 15) {
+            lowBatteryNotified = true;
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) {
+                Notification alert = new Notification.Builder(this, CHANNEL_ID)
+                        .setContentTitle("电量 " + soc + "%，可以插充电器了")
+                        .setContentText("记录仍在继续，请不要点停止")
+                        .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
+                        .setAutoCancel(true)
+                        .build();
+                nm.notify(NOTIF_ID_ALERT, alert);
+            }
+        }
 
         if (sampleCount % 12 == 0) {
             String text = soc + "%  " + (counterUah / 1000) + " mAh  "
