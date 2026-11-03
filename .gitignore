@@ -18,3 +18,8 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# App 构建产物与签名文件
+app/debug.keystore
+*.apk
+*.idsig
