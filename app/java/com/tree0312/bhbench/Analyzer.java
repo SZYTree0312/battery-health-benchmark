@@ -43,6 +43,8 @@ public class Analyzer {
         public int samples;
         public String method = "";
         public String grade = "";
+        /** 样本是否够格出结论。不足时只报"放出了多少"，绝不给健康度。 */
+        public boolean reliable = false;
         public final List<String> warnings = new ArrayList<>();
 
         public double sohPct() {
@@ -123,22 +125,39 @@ public class Analyzer {
         r.normalizedMah = (factor > 0.5 && factor < 2.0) ? q / factor : q;
 
         double soh = r.sohPct();
-        if (soh >= 90) r.grade = "良好";
-        else if (soh >= 80) r.grade = "一般";
-        else if (soh >= 70) r.grade = "衰减明显";
-        else r.grade = "建议更换";
 
+        // 先判样本够不够格，再决定要不要给评级。
+        // 一段几十秒的数据也能算出一个百分比，但那个数字毫无意义，
+        // 直接显示"健康度 0.1% · 建议更换"会让人以为电池废了 —— 必须拦掉。
         if (r.durationS < MIN_SECONDS) {
             r.warnings.add(String.format(Locale.US,
-                    "放电时长只有 %.0f 秒，低于 %.0f 秒下限，结论仅供参考",
-                    r.durationS, MIN_SECONDS));
-        }
-        if (r.socEnd > 10) {
-            r.warnings.add("结束时电量还有 " + r.socEnd + "%，没放完，容量会偏低");
+                    "放电时长只有 %.0f 秒，远低于 %.0f 秒下限", r.durationS, MIN_SECONDS));
         }
         if (r.socStart < 95) {
-            r.warnings.add("开始时电量只有 " + r.socStart + "%，不是满电，容量会偏低");
+            r.warnings.add("开始时电量只有 " + r.socStart + "%，不是满电状态");
         }
+        if (r.socEnd > 10) {
+            r.warnings.add("结束时电量还有 " + r.socEnd + "%，没放到关机");
+        }
+        if (r.measuredMah < 100) {
+            r.warnings.add(String.format(Locale.US,
+                    "全程只测到 %.0f mAh 的变化，数据量太少", r.measuredMah));
+        }
+
+        r.reliable = r.durationS >= MIN_SECONDS
+                && r.socStart >= 95
+                && r.socEnd <= 10
+                && r.measuredMah >= 100;
+
+        if (r.reliable) {
+            if (soh >= 90) r.grade = "良好";
+            else if (soh >= 80) r.grade = "一般";
+            else if (soh >= 70) r.grade = "衰减明显";
+            else r.grade = "建议更换";
+        } else {
+            r.grade = "数据不足";
+        }
+
         if ("counter-delta".equals(r.method)) {
             r.warnings.add("数据取自系统库仑计，精度取决于厂商标定");
         }

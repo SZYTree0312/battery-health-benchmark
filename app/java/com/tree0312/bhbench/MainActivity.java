@@ -304,11 +304,20 @@ public class MainActivity extends Activity {
             return;
         }
 
-        sb.append(String.format(Locale.US, "等效容量   %.0f mAh%n", r.normalizedMah));
-        sb.append(String.format(Locale.US, "实测原始   %.0f mAh @ %.1f°C%n",
-                r.measuredMah, r.avgTemp));
-        sb.append(String.format(Locale.US, "标称容量   %.0f mAh%n", r.designMah));
-        sb.append(String.format(Locale.US, "健康度     %.1f%%   %s%n", r.sohPct(), r.grade));
+        if (r.reliable) {
+            sb.append(String.format(Locale.US, "等效容量   %.0f mAh%n", r.normalizedMah));
+            sb.append(String.format(Locale.US, "实测原始   %.0f mAh @ %.1f°C%n",
+                    r.measuredMah, r.avgTemp));
+            sb.append(String.format(Locale.US, "标称容量   %.0f mAh%n", r.designMah));
+            sb.append(String.format(Locale.US, "健康度     %.1f%%   %s%n", r.sohPct(), r.grade));
+        } else {
+            // 样本不足时只说事实，不给健康度 —— 半个小时的短测算出来的百分比会误导人
+            sb.append(String.format(Locale.US, "本次放出   %.0f mAh%n", r.normalizedMah));
+            sb.append(String.format(Locale.US, "实测原始   %.0f mAh @ %.1f°C%n",
+                    r.measuredMah, r.avgTemp));
+            sb.append(String.format(Locale.US, "标称容量   %.0f mAh%n", r.designMah));
+            sb.append("结论       数据不足，无法计算健康度\n");
+        }
         sb.append(String.format(Locale.US, "放出能量   %.1f Wh%n", r.energyWh));
         sb.append(String.format(Locale.US, "平均电压   %.2f V%n", r.avgVoltage));
         sb.append(String.format(Locale.US, "放电时长   %d 分%n", (int) (r.durationS / 60)));
