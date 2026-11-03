@@ -1,0 +1,20 @@
+# 编译产物
+build/
+collector-native/bhbench
+collector-native/*.o
+
+# 采集数据（体积大，且属于实测记录，不进仓库）
+data/*.csv
+data/*.json
+
+# 进行中的会话指针
+.session
+
+# Python
+__pycache__/
+*.pyc
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

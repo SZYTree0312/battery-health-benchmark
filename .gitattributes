@@ -1,0 +1,3 @@
+# 源码统一用 LF：项目要在 Windows 上编辑、在 Linux/NDK 环境编译，
+# CRLF 会让 build.sh 在 Linux 下直接报 "bad interpreter"。
+* text=auto eol=lf
