@@ -57,23 +57,28 @@ def _design_from_csv(path: str) -> float | None:
 
 
 def print_report(path: str, result: Result) -> None:
+    charge_mode = result.method.startswith("charge")
+    dur_label = "充电时长" if charge_mode else "放电时长"
+    energy_label = "充入能量" if charge_mode else "放出能量"
+    capacity_label = "等效容量" if not charge_mode else "等效容量(折算)"
+
     line = "=" * 64
     print(line)
-    print("电池等效容量报告")
+    print("电池等效容量报告" + ("（充电段）" if charge_mode else ""))
     print(line)
     print(f"{'数据文件':<12}{path}")
     print(f"{'采样点':<12}{result.sample_count}")
-    print(f"{'放电时长':<12}{_fmt_duration(result.duration_s)}")
+    print(f"{dur_label:<12}{_fmt_duration(result.duration_s)}")
     print(f"{'SOC 区间':<12}{result.soc_start:.0f}% → {result.soc_end:.0f}%")
     print(f"{'数据来源':<12}"
           f"{'库仑积分' if result.method == 'coulomb-integration' else '库仑计差值'}")
     print()
-    print(f"{'等效容量':<12}{result.normalized_mah:>7.0f} mAh"
+    print(f"{capacity_label:<12}{result.normalized_mah:>7.0f} mAh"
           f"   (实测 {result.measured_mah:.0f} mAh @ {result.avg_temp_c:.1f}°C)")
     print(f"{'设计容量':<12}{result.design_mah:>7.0f} mAh")
     print(f"{'健康度':<12}{result.soh_pct:>7.1f} %    {result.grade}")
     print()
-    print(f"{'放出能量':<12}{result.energy_wh:>7.2f} Wh")
+    print(f"{energy_label:<12}{result.energy_wh:>7.2f} Wh")
     print(f"{'平均电压':<12}{result.avg_voltage_v:>7.2f} V")
     print(f"{'平均电流':<12}{result.avg_current_ma:>7.0f} mA")
     if result.dcir_mohm is not None:

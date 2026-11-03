@@ -116,7 +116,7 @@ public class ResultActivity extends Activity {
             big.setText(String.format(Locale.US, "%.1f", soh));
             big.setTextSize(64);
             big.setTextColor(gradeColor(soh));
-            unit.setText("健康度 %");
+            unit.setText(report.isChargeMode() ? "健康度 %（充电段折算）" : "健康度 %");
             grade.setText(report.grade);
             grade.setTextColor(gradeColor(soh));
         } else {
@@ -208,10 +208,13 @@ public class ResultActivity extends Activity {
         header.setPadding(0, 0, 0, dp(10));
         box.addView(header);
 
-        addRow(box, "实测原始",
+        addRow(box, "测量方式",
+                report.isChargeMode() ? "充电段 · 按 SOC 折算" : "放电段", false);
+        addRow(box, report.isChargeMode() ? "实测充入" : "实测原始",
                 String.format(Locale.US, "%.0f mAh @ %.1f °C",
                         report.measuredMah, report.avgTemp), false);
-        addRow(box, "放出能量", String.format(Locale.US, "%.1f Wh", report.energyWh), false);
+        addRow(box, report.isChargeMode() ? "充入能量" : "放出能量",
+                String.format(Locale.US, "%.1f Wh", report.energyWh), false);
         addRow(box, "平均电压", String.format(Locale.US, "%.2f V", report.avgVoltage), false);
         addRow(box, "平均电流", String.format(Locale.US, "%.0f mA", report.avgCurrent), false);
         addRow(box, "峰值温度", String.format(Locale.US, "%.1f °C", report.peakTemp), false);

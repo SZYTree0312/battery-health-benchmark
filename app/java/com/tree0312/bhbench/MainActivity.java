@@ -102,9 +102,11 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView hint = new TextView(this);
-        hint.setText("充满 → 拔线 → 静置 2 小时 → 点开始 → 放到自动关机 → 回来查看结果");
+        hint.setText("放电测：充满开始，放到自动关机。\n"
+                + "充电测：用到关机，插上充电器过夜，早上看结果。");
         hint.setTextSize(12);
         hint.setTextColor(Color.GRAY);
+        hint.setLineSpacing(dp(3), 1f);
         hint.setPadding(0, dp(6), 0, dp(16));
         root.addView(hint);
 

@@ -171,6 +171,43 @@ def _discharge_segments(samples: Sequence[Sample]) -> list[list[Sample]]:
     return segments
 
 
+def _charging_segments(samples: Sequence[Sample]) -> list[list[Sample]]:
+    """切出连续的充电段（含已充满）。
+
+    充电段是给"不想为测电池停用手机"的场景准备的：正常用到关机、
+    插上充电器过夜，第二天早上算充入量。充入的电荷同样等于电池容量，
+    只是需要按 SOC 跨度折算一次。
+    """
+    segments: list[list[Sample]] = []
+    current: list[Sample] = []
+    for sample in samples:
+        state = sample.status.lower()
+        if state.startswith("charg") or state == "full":
+            current.append(sample)
+        else:
+            if len(current) >= 2:
+                segments.append(current)
+            current = []
+    if len(current) >= 2:
+        segments.append(current)
+    return segments
+
+
+def _usable(seg: Optional[Sequence[Sample]], charge: bool) -> bool:
+    """这一段数据够不够格算一次有效测量。"""
+    if seg is None or len(seg) < 2:
+        return False
+    duration = seg[-1].t - seg[0].t
+    floor = 600.0 if charge else MIN_DISCHARGE_SECONDS
+    if duration < floor:
+        return False
+    counters = [s.counter_mah for s in seg if s.counter_mah > 0]
+    if len(counters) < 2:
+        return False
+    delta = (counters[-1] - counters[0]) if charge else (counters[0] - counters[-1])
+    return delta >= 100
+
+
 def _pick_segment(segments: Iterable[list[Sample]]) -> Optional[list[Sample]]:
     """取最长的一段。一次测量里通常只有一段是完整放电。"""
     best: Optional[list[Sample]] = None
@@ -277,56 +314,86 @@ def analyze(samples: Sequence[Sample], design_mah: float,
         raise ValueError("design_mah 必须大于 0，用厂商标称容量（mAh）")
 
     warnings: list[str] = []
-    seg = _pick_segment(_discharge_segments(samples))
-    if seg is None:
-        raise ValueError("数据里没有可用的放电段（status=discharging）")
+    discharge = _pick_segment(_discharge_segments(samples))
+    charge = _pick_segment(_charging_segments(samples))
+
+    if _usable(discharge, charge=False):
+        seg, mode = discharge, "discharge"
+    elif _usable(charge, charge=True):
+        seg, mode = charge, "charge"
+    else:
+        # 都不够格：摊最长的一段给用户看，但结论会标"数据不足"
+        seg = discharge if discharge is not None else charge
+        if seg is None:
+            raise ValueError("数据里没有可用的充放电段")
+        mode = "discharge" if seg is discharge else "charge"
 
     duration = seg[-1].t - seg[0].t
-    if duration < MIN_DISCHARGE_SECONDS:
+    floor_s = 600.0 if mode == "charge" else MIN_DISCHARGE_SECONDS
+    if duration < floor_s:
+        label = "充电" if mode == "charge" else "放电"
         warnings.append(
-            f"放电时长只有 {duration:.0f} 秒，低于 {MIN_DISCHARGE_SECONDS:.0f} 秒下限，"
-            "结论仅作参考"
+            f"{label}时长只有 {duration:.0f} 秒，低于 {floor_s:.0f} 秒下限，结论仅作参考"
         )
 
-    # 判据：电流有一处明显非零就走积分；否则看库仑计有没有变化。
-    has_current = any(abs(s.current_ma) > 1.0 for s in seg)
     counters = [s.counter_mah for s in seg if s.counter_mah > 0]
-    counter_span = (max(counters) - min(counters)) if len(counters) >= 2 else 0.0
+    has_current = any(abs(s.current_ma) > 1.0 for s in seg)
+    soc_start, soc_end = seg[0].soc_pct, seg[-1].soc_pct
 
-    if has_current:
-        q_mah, e_wh = integrate(seg)
-        method = "coulomb-integration"
-    elif counter_span > 50.0:
-        # 库仑计是累计量，首尾相减即为放出电荷，不经过积分，不累积采样误差。
-        q_mah = counters[0] - counters[-1]
-        if q_mah <= 0:
-            # 计数反而上升，说明段落里混进了充电，退回全程极差。
-            q_mah = counter_span
-        avg_v = _time_weighted_voltage(seg)
-        e_wh = q_mah / 1000.0 * avg_v
-        method = "counter-delta"
-        warnings.append(
-            "本机 sysfs 不可读，数据取自系统库仑计差值；"
-            "精度取决于厂商对该计数器的标定，跨版本系统可能不同"
-        )
+    if mode == "charge":
+        raw = (counters[-1] - counters[0]) if len(counters) >= 2 else 0.0
+        if raw <= 0:
+            # 库仑计读不到，退回充电电流积分（充电电流为负，取绝对值）
+            raw = sum(
+                abs((a.current_ma + b.current_ma) / 2000.0) * (b.t - a.t) / 3.6
+                for a, b in zip(seg, seg[1:]) if b.t > a.t
+            )
+            method = "charge-integration"
+        else:
+            method = "charge-delta"
+
+        # 充入量覆盖的是 [soc_start, soc_end] 这段，按跨度折算到满电
+        span = soc_end - soc_start
+        q_mah = raw / (span / 100.0) if 10 <= span < 100 else raw
+        e_wh = q_mah / 1000.0 * _time_weighted_voltage(seg)
+        warnings.append("充电段按 SOC 区间折算，假设区间内电荷分布均匀")
+        if span < 60:
+            warnings.append(f"充电区间只覆盖 {span:.0f} 个百分点，折算会放大误差")
+        if soc_end < 95:
+            warnings.append("没有充到满电就停止了，结果会偏低")
     else:
-        raise ValueError(
-            "既没有可用电流，也没有库仑计变化，无法计算容量。"
-            "确认采集时设备处于放电状态，且至少采到一次计数器跳变"
-        )
+        counter_span = (max(counters) - min(counters)) if len(counters) >= 2 else 0.0
+        if has_current:
+            q_mah, e_wh = integrate(seg)
+            method = "coulomb-integration"
+        elif counter_span > 50.0:
+            # 库仑计是累计量，首尾相减即为放出电荷，不经过积分，不累积采样误差。
+            q_mah = counters[0] - counters[-1]
+            if q_mah <= 0:
+                q_mah = counter_span
+            e_wh = q_mah / 1000.0 * _time_weighted_voltage(seg)
+            method = "counter-delta"
+            warnings.append(
+                "本机 sysfs 不可读，数据取自系统库仑计差值；"
+                "精度取决于厂商对该计数器的标定，跨版本系统可能不同"
+            )
+        else:
+            raise ValueError(
+                "既没有可用电流，也没有库仑计变化，无法计算容量。"
+                "确认采集时设备处于充放电状态，且至少采到一次计数器跳变"
+            )
+
+        if soc_end > 10:
+            warnings.append(
+                f"放电结束时系统电量仍有 {soc_end:.0f}%，未放到关机，实测容量会偏低"
+            )
+        if soc_start < 95:
+            warnings.append(
+                f"放电开始时电量只有 {soc_start:.0f}%，不是满充状态，实测容量会偏低"
+            )
 
     t_avg = time_weighted_temp(seg)
     q_norm = normalize_to_ref(q_mah, t_avg, temp_coeff)
-
-    soc_start, soc_end = seg[0].soc_pct, seg[-1].soc_pct
-    if soc_end > 10:
-        warnings.append(
-            f"放电结束时系统电量仍有 {soc_end:.0f}%，未放到关机，实测容量会偏低"
-        )
-    if soc_start < 95:
-        warnings.append(
-            f"放电开始时电量只有 {soc_start:.0f}%，不是满充状态，实测容量会偏低"
-        )
 
     avg_i = (q_mah / (duration / 3600.0)) if duration > 0 else 0.0
 
