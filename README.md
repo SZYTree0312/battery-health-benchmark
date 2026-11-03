@@ -5,7 +5,8 @@
 
 ```bash
 python runner.py probe                 # 看机型、看能读到哪些节点
-python runner.py run --design 5000     # 放电、采集、出报告
+python runner.py start                 # 启动设备端采集（之后可拔线放电）
+python runner.py fetch --design 7000   # 放电结束后取数据、出报告
 ```
 
 ```
@@ -27,15 +28,16 @@ python runner.py run --design 5000     # 放电、采集、出报告
 - 出厂标定与实际容量本来就有 2–5% 的差
 
 所以这个工具的做法是**绕过所有厂商接口，自己做一次物理测量**：
-从满电放到关机，把电流对时间积分，得到实际放出的电荷量（库仑）。
+从满电放到关机，记录全程的电荷流出——能读到电流就做库仑积分，
+只能读到库仑计就取计数器首尾差。两条通道都通向同一个数：实际放出了多少电荷。
 
 ## 三个部件
 
 | 部件 | 语言 | 职责 | 为什么这么选 |
 |---|---|---|---|
-| `collector-native/` | C++17 单文件 | 采样，直接 read sysfs | 无 ART/GC 停顿，1 Hz–200 Hz 稳定，adb push 即跑，不用装 APK |
+| `collector-native/` | C++17 单文件 | 采样：sysfs 直读，或 `dumpsys` 库仑计 | 无 ART/GC 停顿，adb push 即跑，不用装 APK；守护模式拔线后继续记录 |
 | `analyzer/` | Python 3.9+，零依赖 | 库仑积分、温度归一、内阻估算、报告 | 计算在 PC 上做，结果不掺手机侧的调度噪声 |
-| `runner.py` | Python | adb 编排，串起采集与分析 | 一条命令跑完，省手敲 |
+| `runner.py` | Python | adb 编排：probe / start / fetch / stop | 一条命令跑完，省手敲 |
 | `protocol/` | 文档 | 测量协议 | 不按协议跑，数不可比 |
 
 数据流是单向的：设备只负责记原始时序，所有结论都在 PC 上算出来。这条边界不能破——
@@ -47,18 +49,25 @@ python runner.py run --design 5000     # 放电、采集、出报告
 # 1. 编译采集器（需要 Android NDK）
 cd collector-native && ./build.sh && cd ..
 
-# 2. 检查机型支持
+# 2. 检查这台机型能读到什么
 python runner.py probe
 
-# 3. 按协议准备好机器（充满、静置 2 小时、飞行模式）
+# 3. 按协议准备好机器：原装充电器充满 → 拔线 → 静置 2 小时
 #    详见 protocol/discharge-protocol.md
 
-# 4. 采样到关机
-python runner.py run --design 4610 --interval 1
+# 4. 启动设备端守护采集，命令返回后立刻拔线
+python runner.py start --interval 5
 
-# 5. 或者只分析已有的 CSV
-python analyzer/cli.py data/session_20261103_2100.csv --design 4610
+# 5. 放电到自动关机，再插回数据线取结果
+python runner.py fetch --design 7000
+
+# 也可以只分析已有的 CSV
+python analyzer/cli.py data/session_20261103_2159.csv --design 7000
 ```
+
+第 4 步是整套流程的关键：手机插着 USB 就在充电、根本不会放电，所以采集
+必须能在拔线后继续跑。`--daemon` 让程序自己 fork + setsid 脱离 adb 会话
+（`nohup` 和 `setsid` 命令实测都会被 shell 的进程组回收干掉）。
 
 没有真机也能验证分析链路：
 
@@ -73,8 +82,8 @@ python analyzer/cli.py data/sample_healthy.csv data/sample_worn.csv --design 500
 
 | 品牌 | current_now | charge_full / cycle_count | 备注 |
 |---|---|---|---|
-| 小米 / Redmi | 通常可读 | 多数可读 | 工程码 `*#*#6485#*#*` 可交叉验证 |
-| 一加 / realme | 通常可读 | 部分可读 | ColorOS 省电策略会杀后台，优先用 adb 采集 |
+| 小米 / Redmi | **新机型全封** | 读不到 | 25113PN0EC（HyperOS 17）实测 0/8，只能走 dumpsys；老机型另说 |
+| 一加 / realme | 通常可读 | 部分可读 | ColorOS 省电策略会杀后台，优先用守护模式 |
 | OPPO / vivo | 多数可读 | 较少可读 | 部分机型需 `adb root` |
 | 华为 / 荣耀 | 部分可读 | 较少可读 | EMUI 对 sysfs 限制较严，靠放电实测兜底 |
 | 三星 | 通常可读 | 通常可读 | sysfs 最规整 |
@@ -94,9 +103,26 @@ python analyzer/cli.py data/sample_healthy.csv data/sample_worn.csv --design 500
 
 ## 状态
 
-- `analyzer/` 用合成数据验证通过：积分、温度归一、内阻估算三条链路都有可复现的测试数据
-- `collector-native/` 在 MSVC 下编译零警告通过；**尚未在真机上跑过**，头一次用请先 `probe`
-- 只覆盖安卓。iOS 无公开电流 API，鸿蒙电流读数受限，两者都不在范围内
+- `collector-native/` 已在 **Xiaomi 25113PN0EC（HyperOS / Android 17）** 实机验证：
+  sysfs 全部被 SELinux 封闭（0/8 可读），`dumpsys` 库仑计通道可用，
+  守护进程跨 adb 连接存活，采样间隔抖动 0.3 ms
+- `analyzer/` 用合成数据验证了积分、温度归一、内阻估算三条链路
+- 其他厂商机型**未实测**，支持矩阵按驱动源码推断
+
+## 暂不覆盖 iOS / 鸿蒙
+
+不是不想做，是数据源不成立：
+
+- **iOS**：没有公开的电流或库仑计接口。IOKit 那套是私有 API，上架过不了审；
+  唯一可行的是「满电到关机的时长 × 平均功耗」估算，误差 10% 以上，不如不做。
+- **鸿蒙 NEXT**：`@ohos.batteryInfo` 给的是健康状态枚举，不是可用容量；
+  电流读数在多数设备上受限。真要做，前提是先拿到可用的电流或库仑计通道。
+
+将来要接的时候，只需要新增一个采集后端输出同格式 CSV，分析端一行都不用改——
+两条数据通道（电流积分 / 库仑计差值）已经覆盖了「有电流」和「没电流」两种情形。
+
+跨机型验证需要实机。目前手上只有一台小米 17，支持矩阵里其余厂商的路径是按
+驱动源码推断的，标了「通常可读」不等于实测可读。
 
 ## 路线图
 
