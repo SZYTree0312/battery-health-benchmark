@@ -232,6 +232,14 @@ public class MainActivity extends Activity {
             sb.append("\n\n上次记录：").append(new File(SamplerService.currentFile).getName());
         }
 
+        // 充满时自动留一条快照，顺便把最近几条display出来
+        SnapshotStore.maybeRecord(this, soc, counter, temp / 10.0);
+        java.util.List<String> snaps = SnapshotStore.recent(this, 3);
+        if (!snaps.isEmpty()) {
+            sb.append("\n\n满电快照");
+            for (String s : snaps) sb.append("\n  ").append(s);
+        }
+
         tvLive.setText(sb.toString());
         btnStart.setEnabled(!SamplerService.running);
         btnStop.setEnabled(SamplerService.running);

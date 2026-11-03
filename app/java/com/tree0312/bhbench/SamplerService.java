@@ -202,6 +202,9 @@ public class SamplerService extends Service {
         lastCounterUah = counterUah;
         sampleCount++;
 
+        // 充到满时留一条快照：这是最省事的那种数据，用户什么都不用做
+        SnapshotStore.maybeRecord(this, soc, counterUah, tempTenth / 10.0);
+
         // 电量低时提醒插电，而不是让用户等到关机。
         // 关机之后 App 不会自己起来，重启、解锁、再点开始，中间已经充进去几个点了。
         // 留 10-15% 插电，折算跨度还有 85-90%，误差比"关机重开"小得多。
