@@ -40,6 +40,13 @@ public class ResultActivity extends Activity {
     private File csv;
     private Analyzer.Report report;
 
+    // 曲线数据在 onCreate 里一次算好，buildUi 只负责摆位置
+    private double[] chartX, chartSoc, chartFit, chartCounter;
+    private long[] chartGaps;
+    private CurveFit.Line chartLine;
+    /** 放电时的耗电率（%/时，正数）；充电段或拟合失败时为 NaN。 */
+    private double chartRate = Double.NaN;
+
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
 
@@ -51,8 +58,46 @@ public class ResultActivity extends Activity {
         }
         csv = new File(path);
         report = Analyzer.analyze(csv, design);
+        prepareChart();
 
         setContentView(buildUi());
+        recordTuning();
+    }
+
+    /** 算曲线需要的三组序列。数据太少就整体跳过，不去画一条只有两个点的"图"。 */
+    private void prepareChart() {
+        if (report.segment == null || report.segment.size() < 3) return;
+
+        chartX = CurveFit.hours(report.segment);
+        chartSoc = CurveFit.soc(report.segment);
+        // 时间加权：采样点疏密不均（Doze 时几百分钟才一个点），等权回归会被
+        // 密集的活跃期带偏，算出的耗电率偏低。详见 CurveFit.timeWeights 的注释。
+        chartLine = CurveFit.fit(chartX, chartSoc, CurveFit.timeWeights(chartX));
+        if (chartLine.valid) chartFit = CurveFit.eval(chartX, chartLine);
+        chartCounter = CurveFit.counterSoc(report.segment, report.designMah, report.isChargeMode());
+
+        chartGaps = new long[report.segment.size() - 1];
+        for (int i = 1; i < report.segment.size(); i++) {
+            chartGaps[i - 1] = Math.round(report.segment.get(i).t - report.segment.get(i - 1).t);
+        }
+
+        if (chartLine.valid && !report.isChargeMode()) {
+            chartRate = Math.abs(chartLine.slope);
+        }
+    }
+
+    /**
+     * 把这次的曲线质量记进历史，供下次对比。
+     * 同一个 CSV 只记一次 —— 反复打开同一个结果页不该把统计刷成同一个数。
+     */
+    private void recordTuning() {
+        if (chartLine == null || !chartLine.valid) return;
+        android.content.SharedPreferences p =
+                getSharedPreferences("bhbench", MODE_PRIVATE);
+        String key = "tuned_" + csv.getName();
+        if (p.getBoolean(key, false)) return;
+        TuningStore.record(this, chartLine.r2, chartRate);
+        p.edit().putBoolean(key, true).apply();
     }
 
     private int dp(int v) {
@@ -98,6 +143,8 @@ public class ResultActivity extends Activity {
         }
 
         root.addView(buildHeadline());
+        View chart = buildChart();
+        if (chart != null) root.addView(chart);
         root.addView(buildMetricRow());
         root.addView(buildDetails());
         if (!report.warnings.isEmpty()) root.addView(buildWarnings());
@@ -153,8 +200,108 @@ public class ResultActivity extends Activity {
         return box;
     }
 
-    /** 三张指标卡：等效容量 / 标称容量 / 放电时长。 */
-    private View buildMetricRow() {
+    // ------------------------------------------------------------ 电量曲线
+
+    /**
+     * 电量变化图。
+     *
+     * 系统「电池使用情况」里那张图，本质就是 SOC 随时间的折线 —— 我们自己采的点
+     * 能画出一模一样的东西，而且还能叠参考线：一条是「匀速掉电」的拟合直线，
+     * 一条是库仑计反推的真实电荷。有了这两条，图才不只是好看。
+     */
+    private View buildChart() {
+        if (chartX == null || chartSoc == null || chartX.length < 3) return null;
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.topMargin = dp(6);
+        blp.bottomMargin = dp(6);
+        box.setLayoutParams(blp);
+
+        TextView title = new TextView(this);
+        title.setText("电量变化");
+        title.setTextSize(13);
+        title.setTextColor(Color.rgb(130, 130, 130));
+        title.setPadding(0, 0, 0, dp(6));
+        box.addView(title);
+
+        SocChartView chart = new SocChartView(this);
+        chart.setData(chartX, chartSoc, chartFit, chartCounter, chartGaps);
+        box.addView(chart, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(188)));
+
+        if (chartLine != null && chartLine.valid) {
+            TextView rate = new TextView(this);
+            rate.setText(rateText());
+            rate.setTextSize(12);
+            rate.setTextColor(Color.rgb(90, 90, 90));
+            rate.setLineSpacing(dp(3), 1f);
+            rate.setPadding(0, dp(6), 0, 0);
+            box.addView(rate);
+        }
+
+        double dev = CurveFit.maxDeviation(chartSoc, chartCounter);
+        if (dev >= 0) {
+            TextView dv = new TextView(this);
+            dv.setText(String.format(Locale.US,
+                    "系统百分比与库仑计反推最大差 %.1f 个百分点%s",
+                    dev, dev >= 5 ? " —— 厂商的百分比在这段被平滑过，别拿它当电荷量" : "，两者基本贴合"));
+            dv.setTextSize(11);
+            dv.setTextColor(Color.rgb(140, 140, 140));
+            dv.setLineSpacing(dp(3), 1f);
+            dv.setPadding(0, dp(4), 0, 0);
+            box.addView(dv);
+        }
+
+        String cmp = TuningStore.comment(this, chartLine != null ? chartLine.r2 : -1, chartRate);
+        if (cmp != null) {
+            TextView tv = new TextView(this);
+            tv.setText(cmp);
+            tv.setTextSize(11);
+            tv.setTextColor(Color.rgb(140, 140, 140));
+            tv.setLineSpacing(dp(3), 1f);
+            tv.setPadding(0, dp(4), 0, 0);
+            box.addView(tv);
+        }
+
+        return box;
+    }
+
+    /**
+     * 一句话说清这条曲线。
+     *
+     * 「满电可用多久」用实测跨度算（本次用了这么久、掉了几个点），不用拟合斜率 ——
+     * 拟合斜率代表的是"典型强度"，对一条 R²=0.78 的弯曲线它会给 4.0 %/时，
+     * 而这次实际是 17 小时掉 87 个点。用户关心的是后者。
+     */
+    private String rateText() {
+        double durationH = report.durationS / 3600.0;
+        double span = report.socSpan;
+        double fullH = (span > 0 && durationH > 0) ? durationH / span * 100.0 : 0;
+
+        StringBuilder sb = new StringBuilder();
+        if (report.isChargeMode()) {
+            sb.append(String.format(Locale.US, "本次 %.1f 小时充进 %.0f 个点", durationH, span));
+            if (fullH > 0) {
+                sb.append(String.format(Locale.US, "，按跨度算从空充满约 %.1f 小时", fullH));
+            }
+        } else {
+            sb.append(String.format(Locale.US, "本次 %.1f 小时掉了 %.0f 个点", durationH, span));
+            if (fullH > 0) {
+                sb.append(String.format(Locale.US, "，按跨度算满电可用约 %.1f 小时", fullH));
+            }
+        }
+        sb.append(String.format(Locale.US, "\n拟合 %.1f %%/时 · R²=%.3f",
+                Math.abs(chartLine.slope), chartLine.r2));
+        if (chartLine.r2 < 0.5) {
+            sb.append("。R² 偏低说明这段时间强度忽轻忽重，直线只代表平均");
+        }
+        return sb.toString();
+    }
+
+    /** 三张指标卡：等效容量 / 标称容量 / 放电时长。 */    private View buildMetricRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
 

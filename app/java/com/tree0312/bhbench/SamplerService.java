@@ -41,6 +41,10 @@ public class SamplerService extends Service {
 
     /** 库仑计大约 20–25 秒才跳一次，采太密没有意义，默认 5 秒。 */
     private static final long DEFAULT_INTERVAL_MS = 5_000L;
+    /** 电量纹丝不动时最多放到这么疏 —— 一晚上就是一条平线，5 秒一个点纯属浪费电。 */
+    private static final long MAX_INTERVAL_MS = 30_000L;
+    /** 充电时本来就很慢，起步就比放电疏一点。 */
+    private static final long CHARGE_INTERVAL_MS = 15_000L;
 
     private static final int NOTIF_ID = 1001;
     private static final int NOTIF_ID_ALERT = 1002;
@@ -56,16 +60,25 @@ public class SamplerService extends Service {
     /** 本次记录里放电 / 充电各累计了多少个点。界面用它告诉用户"两段都在记"。 */
     public static volatile int dischargePoints = 0;
     public static volatile int chargePoints = 0;
-    /** 当前采样间隔（秒），界面换算时长用。 */
-    public static volatile long intervalS = 5;
+    /** 放电 / 充电各累计了多少秒（按相邻采样点的时间差累加，含 Doze 空档）。 */
+    public static volatile double dischargeSeconds = 0;
+    public static volatile double chargeSeconds = 0;
+    /** 当前实际采样间隔（秒），界面上直接显示，让人知道 App 在省电。 */
+    public static volatile long currentIntervalS = 5;
 
     private Handler handler;
     private BatteryManager bm;
     private BufferedWriter out;
     private long t0;
-    private long intervalMs = DEFAULT_INTERVAL_MS;
+    /** 基础间隔（放电）。充电时用 CHARGE_INTERVAL_MS 打底。 */
+    private long baseIntervalMs = DEFAULT_INTERVAL_MS;
+    /** 当前实际间隔，随电量变化快慢上下浮动。 */
+    private long currentIntervalMs = DEFAULT_INTERVAL_MS;
     private double designMah = 0;
     private boolean lowBatteryNotified = false;
+    /** 上一次采样的时间轴读数，用来累加两段的秒数。 */
+    private double lastSampleT = -1;
+    private double lastCounterMah = -1;
 
     private final Runnable sampleTask = new Runnable() {
         @Override public void run() {
@@ -75,7 +88,7 @@ public class SamplerService extends Service {
             } catch (Exception ignored) {
                 // 单次采样失败不该中断整场测试
             }
-            handler.postDelayed(this, intervalMs);
+            handler.postDelayed(this, currentIntervalMs);
         }
     };
 
@@ -118,13 +131,18 @@ public class SamplerService extends Service {
 
     private void startSampling(double design, long interval) {
         designMah = design;
-        intervalMs = interval;
-        intervalS = interval / 1000L;
+        baseIntervalMs = interval;
+        currentIntervalMs = interval;
+        currentIntervalS = interval / 1000L;
         t0 = System.currentTimeMillis();
         startedAt = t0;
         sampleCount = 0;
         dischargePoints = 0;
         chargePoints = 0;
+        dischargeSeconds = 0;
+        chargeSeconds = 0;
+        lastSampleT = -1;
+        lastCounterMah = -1;
         lowBatteryNotified = false;
 
         File dir = getExternalFilesDir(null);
@@ -216,14 +234,50 @@ public class SamplerService extends Service {
                 status, counterUah / 1000.0, designMah));
         out.flush();
 
+        int prevSoc = lastSoc;
+        double prevCounterMah = lastCounterMah;
+
         lastSoc = soc;
         lastCounterUah = counterUah;
         sampleCount++;
 
+        double counterMahNow = counterUah / 1000.0;
+        double dt = lastSampleT < 0 ? 0 : (tSec - lastSampleT);
+        if (dt < 0) dt = 0;
+
         // 充放电两段都记，分析时再挑能用的那一段。这里只是给界面一个进度感：
         // 用户看到"充电已记 32 分钟"，就不会误以为 App 只肯测耗电。
-        if ("discharging".equals(status)) dischargePoints++;
-        else if ("charging".equals(status) || "full".equals(status)) chargePoints++;
+        boolean charging = "charging".equals(status) || "full".equals(status);
+        if ("discharging".equals(status)) {
+            dischargePoints++;
+            dischargeSeconds += dt;
+        } else if (charging) {
+            chargePoints++;
+            chargeSeconds += dt;
+        }
+
+        // ---- 自适应采样间隔
+        //
+        // 电量百分比和库仑计都没动，说明现在几乎不耗电（息屏、待机），这时候
+        // 5 秒一个点纯属浪费 —— 曲线还是平的。逐步把间隔翻倍到 30 秒。
+        // 只要有任何一个动了，立刻回到基础间隔，把变化过程抓细。
+        //
+        // 前提是安全的：最终容量取库仑计首尾差，是硬件累计量，跟采样频率无关；
+        // 采样疏只会让曲线粗一点，不会让算出来的 mAh 变。
+        boolean flat = prevCounterMah >= 0
+                && soc == prevSoc
+                && Math.abs(counterMahNow - prevCounterMah) < 2.0;
+        if (flat) {
+            currentIntervalMs = Math.min(currentIntervalMs * 2, MAX_INTERVAL_MS);
+        } else {
+            currentIntervalMs = charging
+                    ? Math.max(baseIntervalMs, CHARGE_INTERVAL_MS)
+                    : baseIntervalMs;
+        }
+        currentIntervalS = currentIntervalMs / 1000L;
+
+        lastSampleT = tSec;
+        lastCounterMah = counterMahNow;
 
         // 充到满时留一条快照：这是最省事的那种数据，用户什么都不用做
         SnapshotStore.maybeRecord(this, soc, counterUah, tempTenth / 10.0);

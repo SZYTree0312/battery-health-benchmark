@@ -250,9 +250,11 @@ public class MainActivity extends Activity {
               .append("   ").append(SamplerService.sampleCount).append(" 点");
             // 把两段的进度都摆出来，用户一眼能看到充电段确实也在记
             sb.append("\n已记入    放电 ")
-              .append(dur(SamplerService.dischargePoints * SamplerService.intervalS))
+              .append(dur(Math.round(SamplerService.dischargeSeconds)))
               .append("   充电 ")
-              .append(dur(SamplerService.chargePoints * SamplerService.intervalS));
+              .append(dur(Math.round(SamplerService.chargeSeconds)));
+            sb.append("\n采样间隔  ").append(SamplerService.currentIntervalS).append(" 秒")
+              .append(SamplerService.currentIntervalS > 5 ? "（电量没动，自动放宽省电）" : "");
         } else if (SamplerService.currentFile != null) {
             sb.append("\n\n上次记录：").append(new File(SamplerService.currentFile).getName());
         }

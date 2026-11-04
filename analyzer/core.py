@@ -126,6 +126,8 @@ class Result:
     reliable: bool = True         # 这份数据够不够格下健康度结论
     cross_check_mah: Optional[float] = None   # 另一条算法算出的容量（交叉校验）
     divergence_pct: Optional[float] = None    # 两条算法的偏差 %
+    # 本次结论实际用到的那一段采样点。曲线图直接用，保证画的和算的是同一份数据。
+    segment: Sequence[Sample] = field(default_factory=list)
 
     @property
     def soh_pct(self) -> float:
@@ -599,4 +601,5 @@ def analyze(samples: Sequence[Sample], design_mah: float,
         reliable=reliable,
         cross_check_mah=cross_check,
         divergence_pct=divergence,
+        segment=list(seg),
     )

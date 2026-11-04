@@ -80,6 +80,11 @@ public class Analyzer {
         public String grade = "";
         /** 样本是否够格出结论。不足时只说事实，绝不给健康度。 */
         public boolean reliable = false;
+        /**
+         * 本次结论实际用到的那一段采样点（已切好、已排序）。
+         * 结果页拿它画曲线 —— 不重新读一遍文件，也保证画的和算的是同一份数据。
+         */
+        public List<Row> segment;
         public final List<String> warnings = new ArrayList<>();
 
         public double sohPct() {
@@ -127,6 +132,7 @@ public class Analyzer {
         }
 
         fillBasics(r, seg);
+        r.segment = seg;
         computeNetCharge(r, seg);
         applySocScaling(r);
 
