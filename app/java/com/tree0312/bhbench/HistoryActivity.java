@@ -77,6 +77,7 @@ public class HistoryActivity extends Activity {
         super.onCreate(saved);
         pal = Palette.of(this);
         setContentView(buildUi());
+        Ui.applySystemBars(this, pal);
         reload();
     }
 
@@ -98,12 +99,13 @@ public class HistoryActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(14) + statusBarH(), dp(18), dp(28));
+        root.setPadding(dp(20), dp(16) + statusBarH(), dp(20), dp(32));
         scroll.addView(root);
 
         TextView title = new TextView(this);
         title.setText("历史记录");
-        title.setTextSize(22);
+        title.setTextSize(26);
+        title.setLetterSpacing(-0.01f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(pal.textPrimary);
         root.addView(title);
@@ -119,12 +121,12 @@ public class HistoryActivity extends Activity {
         bar.setPadding(0, 0, 0, dp(12));
         root.addView(bar);
 
-        btnSelectAll = new Button(this);
+        btnSelectAll = Ui.secondary(this, pal, "全选");
         btnSelectAll.setText("全选");
         btnSelectAll.setOnClickListener(v -> toggleSelectAll());
         bar.addView(btnSelectAll, new LinearLayout.LayoutParams(0, dp(44), 1f));
 
-        btnExport = new Button(this);
+        btnExport = Ui.secondary(this, pal, "导出");
         btnExport.setText("导出");
         btnExport.setEnabled(false);
         btnExport.setOnClickListener(v -> startExport());
@@ -132,7 +134,7 @@ public class HistoryActivity extends Activity {
         lp.leftMargin = dp(6);
         bar.addView(btnExport, lp);
 
-        btnDelete = new Button(this);
+        btnDelete = Ui.secondary(this, pal, "删除");
         btnDelete.setText("删除");
         btnDelete.setEnabled(false);
         btnDelete.setOnClickListener(v -> confirmDelete());
@@ -195,7 +197,7 @@ public class HistoryActivity extends Activity {
     private View buildRow(Item it) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setBackgroundColor(pal.surfaceAlt);
+        row.setBackground(Ui.rounded(this, pal.surfaceAlt, Ui.CARD_RADIUS_DP));
         row.setPadding(dp(10), dp(12), dp(12), dp(12));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);

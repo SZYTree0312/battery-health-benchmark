@@ -57,8 +57,8 @@ echo "[2/6] 链接资源，生成 R.java"
   --java "$OUT/gen" \
   --min-sdk-version 26 \
   --target-sdk-version 34 \
-  --version-code 7 \
-  --version-name 0.5.1 \
+  --version-code 8 \
+  --version-name 0.5.2 \
   --auto-add-overlay
 
 echo "[3/6] 编译 Java"

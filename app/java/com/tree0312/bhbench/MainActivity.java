@@ -1,5 +1,7 @@
 package com.tree0312.bhbench;
 
+import static com.tree0312.bhbench.Ui.*;
+
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -37,7 +39,9 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    private TextView tvLive;
+    /** 实时数据用固定行复用，每秒只改数值，不重建 View。 */
+    private TextView[] liveValues;
+    private TextView liveExtra;
     private TextView tvResult;
     private TextView tvDevice;
     private EditText etDesign;
@@ -66,6 +70,7 @@ public class MainActivity extends Activity {
         bm = (BatteryManager) getSystemService(BATTERY_SERVICE);
         prefs = getSharedPreferences("bhbench", MODE_PRIVATE);
         setContentView(buildUi());
+        Ui.applySystemBars(this, pal);
         askNotificationPermission();
         ui.post(refresh);
     }
@@ -103,129 +108,132 @@ public class MainActivity extends Activity {
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(pal.bg);
+        scroll.setClipToPadding(false);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(12) + statusBarH(), dp(18), dp(24));
+        root.setPadding(dp(20), dp(16) + statusBarH(), dp(20), dp(S6));
         scroll.addView(root);
 
-        TextView title = new TextView(this);
-        title.setText("电池容量测量");
-        title.setTextSize(23);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title);
+        root.addView(Ui.title(this, pal, "电池容量测量"));
+        TextView sub = Ui.subtitle(this, pal,
+                "连续记录，充电、放电都记，中途不用停。");
+        sub.setTextColor(pal.textSecondary);
+        root.addView(sub);
 
-        TextView hint = new TextView(this);
-        hint.setText("点开始后连续记录，充电、放电都记，中途不用停。\n"
-                + "· 满电拔线用下去 —— 记放电段，到 15% 会提醒插电\n"
-                + "· 插着充电器 —— 记充电段，充到 100% 即可\n"
-                + "分析时优先用完整的放电段；不完整就自动退回用充电段。");
-        hint.setTextSize(12);
-        hint.setTextColor(pal.textTertiary);
-        hint.setLineSpacing(dp(3), 1f);
-        hint.setPadding(0, dp(6), 0, dp(16));
-        root.addView(hint);
+        TextView how = new TextView(this);
+        how.setText("满电拔线用下去，到 15% 会提醒插电；插着充电器就一直充到 100%。\n"
+                + "分析时优先用完整放电段，不完整自动退回充电段。");
+        how.setTextSize(12);
+        how.setTextColor(pal.textTertiary);
+        how.setLineSpacing(dp(3), 1f);
+        how.setPadding(0, dp(S3), 0, 0);
+        root.addView(how);
 
-        // 实时面板
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(pal.surface);
-        panel.setPadding(dp(14), dp(14), dp(14), dp(14));
-        root.addView(panel);
+        // ---- 实时数据
+        root.addView(Ui.section(this, pal, "实时数据"));
+        LinearLayout live = Ui.card(this, pal);
+        String[] labels = {"电量", "电压", "温度", "库仑计", "电流", "状态"};
+        liveValues = new TextView[labels.length];
+        for (int i = 0; i < labels.length; i++) {
+            if (i > 0) live.addView(Ui.divider(this, pal));
+            Ui.PrefRow r = Ui.prefRow(this, pal, labels[i]);
+            liveValues[i] = r.value;
+            live.addView(r.view);
+        }
+        liveExtra = new TextView(this);
+        liveExtra.setTextSize(12);
+        liveExtra.setTextColor(pal.textSecondary);
+        liveExtra.setLineSpacing(dp(3), 1f);
+        liveExtra.setPadding(0, dp(S3), 0, 0);
+        live.addView(liveExtra);
+        root.addView(live);
 
-        tvLive = new TextView(this);
-        tvLive.setTextSize(14);
-        tvLive.setTextColor(pal.textPrimary);
-        tvLive.setLineSpacing(dp(4), 1f);
-        panel.addView(tvLive);
-
-        // 设计容量
+        // ---- 设置
+        root.addView(Ui.section(this, pal, "测量设置"));
+        LinearLayout setting = Ui.card(this, pal);
         TextView lblDesign = new TextView(this);
         lblDesign.setText("厂商标称容量（mAh）");
         lblDesign.setTextSize(13);
-        lblDesign.setPadding(0, dp(18), 0, dp(4));
-        root.addView(lblDesign);
+        lblDesign.setTextColor(pal.textSecondary);
+        setting.addView(lblDesign);
 
         etDesign = new EditText(this);
         etDesign.setInputType(InputType.TYPE_CLASS_NUMBER);
         etDesign.setHint("例如 7000");
+        etDesign.setTextSize(18);
         etDesign.setText(String.valueOf(prefs.getInt("design", 0) > 0
                 ? prefs.getInt("design", 0) : ""));
-        root.addView(etDesign);
+        LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        ep.topMargin = dp(S2);
+        setting.addView(etDesign, ep);
+        root.addView(setting);
 
-        // 按钮：两行。开始/停止是一组，分析/历史是另一组 —— 混在一行会把
-        // 每个按钮挤到只剩图标宽度。
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(14), 0, 0);
-        root.addView(row);
+        // ---- 操作：一个主按钮，其余都是次按钮，主次一眼可分
+        root.addView(Ui.section(this, pal, "操作"));
 
-        btnStart = new Button(this);
-        btnStart.setText("开始记录");
+        btnStart = Ui.primary(this, pal, "开始记录");
         btnStart.setOnClickListener(v -> startSampling());
-        row.addView(btnStart, new LinearLayout.LayoutParams(0, dp(48), 1f));
-
-        btnStop = new Button(this);
-        btnStop.setText("停止");
+        btnStop = Ui.secondary(this, pal, "停止");
         btnStop.setEnabled(false);
         btnStop.setOnClickListener(v -> stopSampling());
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(48), 1f);
-        lp.leftMargin = dp(8);
-        row.addView(btnStop, lp);
+        root.addView(Ui.buttonRow(this, S2, btnStart, btnStop));
 
-        LinearLayout row2 = new LinearLayout(this);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.setPadding(0, dp(8), 0, 0);
-        root.addView(row2);
-
-        btnAnalyze = new Button(this);
-        btnAnalyze.setText("分析最新");
+        btnAnalyze = Ui.secondary(this, pal, "分析最新");
         btnAnalyze.setOnClickListener(v -> analyzeLatest());
-        row2.addView(btnAnalyze, new LinearLayout.LayoutParams(0, dp(48), 1f));
-
-        Button btnHistory = new Button(this);
-        btnHistory.setText("历史记录");
+        Button btnHistory = Ui.secondary(this, pal, "历史记录");
         btnHistory.setOnClickListener(v ->
                 startActivity(new Intent(this, HistoryActivity.class)));
-        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, dp(48), 1f);
-        lp2.leftMargin = dp(8);
-        row2.addView(btnHistory, lp2);
+        root.addView(Ui.buttonRow(this, S2, btnAnalyze, btnHistory));
 
-        Button btnCharger = new Button(this);
-        btnCharger.setText("充电器体检");
+        Button btnCharger = Ui.secondary(this, pal, "充电器体检");
         btnCharger.setOnClickListener(v ->
                 startActivity(new Intent(this, ChargerProbeActivity.class)));
         LinearLayout.LayoutParams lp3 = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
-        lp3.topMargin = dp(8);
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp3.topMargin = dp(S2);
         root.addView(btnCharger, lp3);
 
-        // 显示模式。按钮上直接写当前模式，不用点进去才知道。
-        Button btnTheme = new Button(this);
-        btnTheme.setText("显示模式 · " + ThemeMode.label(ThemeMode.get(this)));
+        Button btnChargerHistory = Ui.secondary(this, pal, "充电器档案");
+        btnChargerHistory.setOnClickListener(v ->
+                startActivity(new Intent(this, ChargerHistoryActivity.class)));
+        LinearLayout.LayoutParams lph = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lph.topMargin = dp(S2);
+        root.addView(btnChargerHistory, lph);
+
+        Button btnTheme = Ui.secondary(this, pal,
+                "显示模式 · " + ThemeMode.label(ThemeMode.get(this)));
+        btnTheme.setMinHeight(dp(44));
         btnTheme.setOnClickListener(v -> showThemeDialog());
         LinearLayout.LayoutParams lp4 = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
-        lp4.topMargin = dp(8);
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp4.topMargin = dp(S2);
         root.addView(btnTheme, lp4);
 
-        // 设备信息
-        tvDevice = new TextView(this);
-        tvDevice.setTextSize(11);
-        tvDevice.setTextColor(pal.textTertiary);
-        tvDevice.setPadding(0, 0, 0, dp(10));
-        tvDevice.setText(Build.MANUFACTURER + " " + Build.MODEL
-                + "   Android " + Build.VERSION.RELEASE
-                + " (API " + Build.VERSION.SDK_INT + ")");
-        root.addView(tvDevice);
-
-        // 结果
+        // ---- 最近一次结果
+        root.addView(Ui.section(this, pal, "最近一次结果"));
+        LinearLayout resultCard = Ui.card(this, pal);
         tvResult = new TextView(this);
         tvResult.setTextSize(13);
         tvResult.setTextColor(pal.textPrimary);
         tvResult.setLineSpacing(dp(5), 1f);
-        tvResult.setPadding(dp(14), dp(14), dp(14), dp(14));
-        tvResult.setBackgroundColor(pal.surfaceAlt);
-        root.addView(tvResult);
+        resultCard.addView(tvResult);
+        root.addView(resultCard);
+
+        tvDevice = new TextView(this);
+        tvDevice.setTextSize(11);
+        tvDevice.setTextColor(pal.textTertiary);
+        tvDevice.setPadding(0, dp(S5), 0, 0);
+        tvDevice.setText(Build.MANUFACTURER + " " + Build.MODEL
+                + "   Android " + Build.VERSION.RELEASE
+                + " (API " + Build.VERSION.SDK_INT + ")");
+        root.addView(tvDevice);
 
         return scroll;
     }
@@ -282,41 +290,45 @@ public class MainActivity extends Activity {
             default: status = "未知";
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("电量    ").append(soc).append("%\n");
-        sb.append("电压    ").append(mv).append(" mV\n");
-        sb.append("温度    ").append(String.format(Locale.US, "%.1f", temp / 10.0)).append(" °C\n");
-        sb.append("库仑计  ").append(counter / 1000).append(" mAh\n");
-        sb.append("电流    ").append(curUa == Integer.MIN_VALUE || curUa == 0
-                ? "不可用（该机型不提供）"
-                : String.format(Locale.US, "%.0f mA", Math.abs(curUa) / 1000.0)).append("\n");
-        sb.append("状态    ").append(status);
+        // 六行固定，只刷数值 —— 系统设置的电池页就是这个结构
+        liveValues[0].setText(soc + " %");
+        liveValues[1].setText(mv + " mV");
+        liveValues[2].setText(String.format(Locale.US, "%.1f °C", temp / 10.0));
+        liveValues[3].setText(counter / 1000 + " mAh");
+        liveValues[4].setText(curUa == Integer.MIN_VALUE || curUa == 0
+                ? "不可用"
+                : String.format(Locale.US, "%.0f mA", Math.abs(curUa) / 1000.0));
+        liveValues[5].setText(status);
 
+        // 记录进度、快照这类不定长信息放在下面的次级文字里
+        StringBuilder extra = new StringBuilder();
         if (SamplerService.running) {
             long secs = (System.currentTimeMillis() - SamplerService.startedAt) / 1000;
-            sb.append("\n\n正在记录  ")
-              .append(String.format(Locale.US, "%d:%02d:%02d", secs / 3600, (secs % 3600) / 60, secs % 60))
-              .append("   ").append(SamplerService.sampleCount).append(" 点");
-            // 把两段的进度都摆出来，用户一眼能看到充电段确实也在记
-            sb.append("\n已记入    放电 ")
-              .append(dur(Math.round(SamplerService.dischargeSeconds)))
-              .append("   充电 ")
-              .append(dur(Math.round(SamplerService.chargeSeconds)));
-            sb.append("\n采样间隔  ").append(SamplerService.currentIntervalS).append(" 秒")
-              .append(SamplerService.currentIntervalS > 5 ? "（电量没动，自动放宽省电）" : "");
+            extra.append("正在记录  ")
+                 .append(String.format(Locale.US, "%d:%02d:%02d",
+                         secs / 3600, (secs % 3600) / 60, secs % 60))
+                 .append("   ").append(SamplerService.sampleCount).append(" 点")
+                 .append("\n已记入  放电 ")
+                 .append(dur(Math.round(SamplerService.dischargeSeconds)))
+                 .append("   充电 ")
+                 .append(dur(Math.round(SamplerService.chargeSeconds)))
+                 .append("\n采样间隔  ").append(SamplerService.currentIntervalS).append(" 秒")
+                 .append(SamplerService.currentIntervalS > 5 ? "（电量没动，自动放宽）" : "");
         } else if (SamplerService.currentFile != null) {
-            sb.append("\n\n上次记录：").append(new File(SamplerService.currentFile).getName());
+            extra.append("上次记录：").append(new File(SamplerService.currentFile).getName());
         }
 
-        // 充满时自动留一条快照，顺便把最近几条display出来
+        // 充满时自动留一条快照
         SnapshotStore.maybeRecord(this, soc, counter, temp / 10.0);
         java.util.List<String> snaps = SnapshotStore.recent(this, 3);
         if (!snaps.isEmpty()) {
-            sb.append("\n\n满电快照");
-            for (String s : snaps) sb.append("\n  ").append(s);
+            if (extra.length() > 0) extra.append("\n");
+            extra.append("满电快照");
+            for (String x : snaps) extra.append("\n  ").append(x);
         }
+        liveExtra.setText(extra.toString());
+        liveExtra.setVisibility(extra.length() == 0 ? View.GONE : View.VISIBLE);
 
-        tvLive.setText(sb.toString());
         btnStart.setEnabled(!SamplerService.running);
         btnStop.setEnabled(SamplerService.running);
     }

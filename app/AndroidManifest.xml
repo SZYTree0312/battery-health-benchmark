@@ -40,6 +40,10 @@
             android:name=".ChargerProbeActivity"
             android:label="充电器体检"
             android:exported="false" />
+        <activity
+            android:name=".ChargerHistoryActivity"
+            android:label="充电器档案"
+            android:exported="false" />
 
         <service
             android:name=".SamplerService"

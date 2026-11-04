@@ -94,6 +94,54 @@ public final class ChargerStore {
         prefs(c).edit().putString(KEY, sb.toString()).apply();
     }
 
+    /** 改名。历史页里长按一条就能给「未命名」补上名字。 */
+    public static void rename(Context c, long ts, String name) {
+        List<Entry> all = load(c);
+        for (Entry e : all) {
+            if (e.ts == ts) e.name = sanitize(name);
+        }
+        saveAll(c, all);
+    }
+
+    public static void clear(Context c) {
+        prefs(c).edit().remove(KEY).apply();
+    }
+
+    /** 导出用。CSV 一列一个字段，Excel / Python 都能直接读。 */
+    public static String toCsv(Context c) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("timestamp_ms,name,peak_w,steady_w,tier,duration_s\n");
+        for (Entry e : load(c)) {
+            sb.append(e.ts).append(',')
+              .append('"').append(e.name.replace("\"", "\"\"")).append('"').append(',')
+              .append(String.format(Locale.US, "%.2f", e.peakW)).append(',')
+              .append(String.format(Locale.US, "%.2f", e.steadyW)).append(',')
+              .append('"').append(e.tier.replace("\"", "\"\"")).append('"').append(',')
+              .append(e.durationS).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static String sanitize(String s) {
+        String out = s == null ? "" : s.trim();
+        if (out.isEmpty()) out = "未命名";
+        return out.replace("|", " ").replace(";;", " ").replace("\n", " ");
+    }
+
+    private static void saveAll(Context c, List<Entry> all) {
+        StringBuilder sb = new StringBuilder();
+        for (Entry x : all) {
+            if (sb.length() > 0) sb.append(";;");
+            sb.append(x.ts).append('|')
+              .append(sanitize(x.name)).append('|')
+              .append(String.format(Locale.US, "%.2f", x.peakW)).append('|')
+              .append(String.format(Locale.US, "%.2f", x.steadyW)).append('|')
+              .append(x.tier.replace("|", " ")).append('|')
+              .append(x.durationS);
+        }
+        prefs(c).edit().putString(KEY, sb.toString()).apply();
+    }
+
     /** 和上一次不同充电器的对比，用来说明"这次和上次差多少"。 */
     public static String compareWithPrevious(Context c, Entry cur) {
         List<Entry> all = load(c);

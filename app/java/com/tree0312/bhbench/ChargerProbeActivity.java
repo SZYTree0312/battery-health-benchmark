@@ -99,6 +99,7 @@ public class ChargerProbeActivity extends Activity {
         pal = Palette.of(this);
         bm = (BatteryManager) getSystemService(BATTERY_SERVICE);
         setContentView(buildUi());
+        Ui.applySystemBars(this, pal);
         ui.post(loop);
     }
 
@@ -128,12 +129,13 @@ public class ChargerProbeActivity extends Activity {
         scroll.setBackgroundColor(pal.bg);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(12) + statusBarH(), dp(18), dp(28));
+        root.setPadding(dp(20), dp(16) + statusBarH(), dp(20), dp(32));
         scroll.addView(root);
 
         TextView title = new TextView(this);
         title.setText("充电器体检");
-        title.setTextSize(22);
+        title.setTextSize(26);
+        title.setLetterSpacing(-0.01f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(pal.textPrimary);
         root.addView(title);
@@ -149,7 +151,7 @@ public class ChargerProbeActivity extends Activity {
         // 实时大字
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(pal.surface);
+        panel.setBackground(Ui.rounded(this, pal.surface, Ui.CARD_RADIUS_DP));
         panel.setPadding(dp(16), dp(16), dp(16), dp(16));
         root.addView(panel);
 
@@ -195,13 +197,13 @@ public class ChargerProbeActivity extends Activity {
         row.setPadding(0, dp(14), 0, dp(10));
         root.addView(row);
 
-        btnStart = new Button(this);
+        btnStart = Ui.primary(this, pal, "开始体检");
         btnStart.setText(String.format(Locale.US, "开始体检（%d 秒）",
                 ChargerProbe.DURATION_MS / 1000));
         btnStart.setOnClickListener(v -> startProbe());
         row.addView(btnStart, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
-        btnStop = new Button(this);
+        btnStop = Ui.secondary(this, pal, "停止");
         btnStop.setText("停止");
         btnStop.setEnabled(false);
         btnStop.setOnClickListener(v -> stopProbe("已停止"));
@@ -216,6 +218,16 @@ public class ChargerProbeActivity extends Activity {
         historyBox = new LinearLayout(this);
         historyBox.setOrientation(LinearLayout.VERTICAL);
         root.addView(historyBox);
+
+        Button openArchive = Ui.secondary(this, pal, "查看全部档案 →");
+        openArchive.setOnClickListener(v -> startActivity(
+                new Intent(this, ChargerHistoryActivity.class)));
+        LinearLayout.LayoutParams oalp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        oalp.topMargin = dp(8);
+        root.addView(openArchive, oalp);
+
         renderHistory();
 
         return scroll;
@@ -408,7 +420,7 @@ public class ChargerProbeActivity extends Activity {
         resultBox.addView(caveat);
 
         // 保存
-        Button save = new Button(this);
+        Button save = Ui.secondary(this, pal, "保存这次结果");
         save.setText("保存这次结果");
         save.setOnClickListener(v -> askName());
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
@@ -541,7 +553,7 @@ public class ChargerProbeActivity extends Activity {
     private void addCard(LinearLayout row, String value, String label, boolean gap) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(pal.surfaceAlt);
+        card.setBackground(Ui.rounded(this, pal.surfaceAlt, Ui.CARD_RADIUS_DP));
         card.setPadding(dp(10), dp(12), dp(10), dp(12));
         card.setGravity(Gravity.CENTER);
 

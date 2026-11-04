@@ -71,6 +71,7 @@ public class ResultActivity extends Activity {
         prepareChart();
 
         setContentView(buildUi());
+        Ui.applySystemBars(this, pal);
         recordTuning();
     }
 
@@ -136,7 +137,8 @@ public class ResultActivity extends Activity {
         // 标题
         TextView title = new TextView(this);
         title.setText("测量结果");
-        title.setTextSize(22);
+        title.setTextSize(26);
+        title.setLetterSpacing(-0.01f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(pal.textPrimary);
         root.addView(title);
@@ -381,7 +383,7 @@ public class ResultActivity extends Activity {
     private View metricCard(String value, String label, boolean withGap) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(pal.surfaceAlt);
+        card.setBackground(Ui.rounded(this, pal.surfaceAlt, Ui.CARD_RADIUS_DP));
         card.setPadding(dp(12), dp(14), dp(12), dp(14));
         card.setGravity(Gravity.CENTER);
 
@@ -504,7 +506,7 @@ public class ResultActivity extends Activity {
     private View buildWarnings() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setBackgroundColor(pal.warnSurface);
+        box.setBackground(Ui.rounded(this, pal.warnSurface, Ui.CARD_RADIUS_DP));
         box.setPadding(dp(14), dp(14), dp(14), dp(14));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -552,12 +554,12 @@ public class ResultActivity extends Activity {
         lp.topMargin = dp(30);
         row.setLayoutParams(lp);
 
-        Button export = new Button(this);
+        Button export = Ui.secondary(this, pal, "导出原始数据");
         export.setText("导出原始数据");
         export.setOnClickListener(v -> exportCsv());
         row.addView(export, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
-        Button close = new Button(this);
+        Button close = Ui.secondary(this, pal, "关闭");
         close.setText("返回");
         close.setOnClickListener(v -> finish());
         LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, dp(48), 1f);
