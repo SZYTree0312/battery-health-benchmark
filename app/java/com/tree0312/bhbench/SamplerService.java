@@ -124,8 +124,11 @@ public class SamplerService extends Service {
 
         try {
             out = new BufferedWriter(new FileWriter(file, false), 1 << 14);
+            // 第 7 列是 BATTERY_PROPERTY_CHARGE_COUNTER —— 当前**剩余电荷**，
+            // 随放电递减。v0.1 误命名为 charge_full_mah（字面像"满电容量常数"），
+            // 已改。analyzer 仍兼容旧列名，手机上的历史会话照样能读。
             out.write("t_s,current_ma,voltage_mv,soc_pct,temp_c,status,"
-                    + "charge_full_mah,design_mah,cycle_count\n");
+                    + "charge_counter_mah,design_mah,cycle_count\n");
             out.flush();
         } catch (IOException e) {
             stopSelf();

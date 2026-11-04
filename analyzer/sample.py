@@ -71,7 +71,9 @@ def build_session(target_mah: float, design_mah: float, temp_base: float,
             "soc_pct": f"{soc:.1f}",
             "temp_c": f"{temp:.2f}",
             "status": "discharging",
-            "charge_full_mah": f"{target_mah:.0f}",
+            # CHARGE_COUNTER 是**剩余**电荷，随放电线性递减；
+            # v0.1 这里误写成恒定常数值，等于假装库仑计没在动。
+            "charge_counter_mah": f"{target_mah * soc / 100.0:.1f}",
             "design_mah": f"{design_mah:.0f}",
             "cycle_count": "0",
         })

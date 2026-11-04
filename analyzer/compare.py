@@ -77,7 +77,8 @@ def grade_a(diff_pct: float | None) -> tuple[str, str]:
 def grade_b(soc_start: float, soc_end: float, hours: float) -> tuple[str, str]:
     """放电测量的可信度，看覆盖区间是否完整。"""
     if soc_start >= 95 and soc_end <= 10 and hours >= 2:
-        return "高", f"完整放电 {soc_start:.0f}%→{soc_end:.0f}%，无需折算"
+        return "高", (f"覆盖 {soc_start:.0f}%→{soc_end:.0f}%，"
+                      f"按 {soc_start - soc_end:.0f}% 跨度折算到满电")
     if soc_start >= 90 and soc_end <= 20:
         return "中", f"覆盖 {soc_start:.0f}%→{soc_end:.0f}%，区间略短"
     return "低", f"覆盖 {soc_start:.0f}%→{soc_end:.0f}%，折算误差会放大"

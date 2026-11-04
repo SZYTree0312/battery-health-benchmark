@@ -123,8 +123,10 @@ public class ResultActivity extends Activity {
             big.setText("—");
             big.setTextSize(64);
             big.setTextColor(Color.rgb(150, 150, 150));
-            unit.setText("本次放出 " + Math.round(report.normalizedMah) + " mAh");
-            grade.setText("数据不足，无法判定健康度");
+            unit.setText("本次净电荷 " + Math.round(report.rawChargeMah) + " mAh");
+            grade.setText("数据异常".equals(report.grade)
+                    ? "数据异常：结果超出物理合理范围，请核对下方提示"
+                    : "数据不足，无法判定健康度");
             grade.setTextColor(Color.rgb(120, 120, 120));
         }
 
@@ -151,7 +153,8 @@ public class ResultActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
 
         row.addView(metricCard(
-                String.format(Locale.US, "%.0f", report.normalizedMah), "mAh 等效容量", true));
+                String.format(Locale.US, "%.0f", report.normalizedMah),
+                report.reliable ? "mAh 等效容量" : "mAh 参考值(未采信)", true));
         row.addView(metricCard(
                 String.format(Locale.US, "%.0f", report.designMah), "mAh 标称", true));
         row.addView(metricCard(durationText(), "放电时长", false));
@@ -210,7 +213,10 @@ public class ResultActivity extends Activity {
 
         addRow(box, "测量方式",
                 report.isChargeMode() ? "充电段 · 按 SOC 折算" : "放电段", false);
-        addRow(box, report.isChargeMode() ? "实测充入" : "实测原始",
+        addRow(box, "数据来源", sourceLabel(), false);
+        addRow(box, "本次净电荷",
+                String.format(Locale.US, "%.0f mAh", report.rawChargeMah), false);
+        addRow(box, "折算后容量",
                 String.format(Locale.US, "%.0f mAh @ %.1f °C",
                         report.measuredMah, report.avgTemp), false);
         addRow(box, report.isChargeMode() ? "充入能量" : "放出能量",
@@ -218,12 +224,31 @@ public class ResultActivity extends Activity {
         addRow(box, "平均电压", String.format(Locale.US, "%.2f V", report.avgVoltage), false);
         addRow(box, "平均电流", String.format(Locale.US, "%.0f mA", report.avgCurrent), false);
         addRow(box, "峰值温度", String.format(Locale.US, "%.1f °C", report.peakTemp), false);
-        addRow(box, "SOC 区间", report.socStart + "% → " + report.socEnd + "%", false);
-        addRow(box, "采样点", String.valueOf(report.samples), false);
-        addRow(box, "数据来源",
-                "counter-delta".equals(report.method) ? "系统库仑计" : "电流积分", true);
+        addRow(box, "SOC 区间",
+                report.socStart + "% → " + report.socEnd + "%"
+                        + String.format(Locale.US, "（跨度 %.0f%%）", report.socSpan), false);
+        addRow(box, "采样质量",
+                String.format(Locale.US, "%d 点 / 有效覆盖 %.0f%% / 最长空档 %.1f h",
+                        report.samples, report.coveragePct, report.maxGapS / 3600.0), false);
+        if (report.crossCheckMah >= 0 && !Double.isNaN(report.divergencePct)) {
+            addRow(box, "交叉校验(电流积分)",
+                    String.format(Locale.US, "%.0f mAh (%+.0f%%)",
+                            report.crossCheckMah, report.divergencePct), false);
+        }
+        addRow(box, "测量结论", report.reliable ? "可采信" : "不采信", true);
 
         return box;
+    }
+
+    /** 别再把库仑计差值误标成「电流积分」——v0.1 就是这么骗到人的。 */
+    private String sourceLabel() {
+        switch (report.method) {
+            case "counter-delta":      return "系统库仑计差值";
+            case "charge-delta":       return "系统库仑计差值（充电段）";
+            case "charge-integration": return "充电电流积分";
+            case "coulomb-integration":
+            default:                   return "电流积分";
+        }
     }
 
     private void addRow(LinearLayout parent, String label, String value, boolean last) {

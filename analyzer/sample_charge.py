@@ -25,19 +25,30 @@ def build() -> list[str]:
     n = int(total_s / STEP_S)
 
     lines = ["t_s,current_ma,voltage_mv,soc_pct,temp_c,status,"
-             "charge_full_mah,design_mah,cycle_count"]
+             "charge_counter_mah,design_mah,cycle_count"]
+
+    # 快充前段电流大、80% 后转恒压收尾的**形状**（单位 A 量级）。
+    def shape(ratio: float) -> float:
+        if ratio < 0.55:
+            return 3.2 + 0.12 * (ratio / 0.55)
+        if ratio < 0.85:
+            return 1.6 * (1.0 - (ratio - 0.55) / 0.35 * 0.75)
+        return 0.3 * (1.0 - (ratio - 0.85) / 0.15)
+
+    # 电流必须和库仑计守恒：整段积分恰好等于 Δcounter，
+    # 否则交叉校验会把合成数据自己的不一致当成真机故障。
+    target_delta = FULL_MAH * span / 100.0
+    raw_mah_per_amp = sum(
+        (shape(k / n) + shape((k + 1) / n)) / 2 * STEP_S / 3.6
+        for k in range(n)
+    )
+    scale = target_delta / raw_mah_per_amp
 
     for k in range(n + 1):
         ratio = k / n
         soc = SOC_START + span * ratio
         counter = FULL_MAH * soc / 100.0
-        # 快充前段电流大，80% 之后转恒压逐渐收尾
-        if ratio < 0.55:
-            current_ma = -3200.0 - 120.0 * (ratio / 0.55)
-        elif ratio < 0.85:
-            current_ma = -1600.0 * (1.0 - (ratio - 0.55) / 0.35 * 0.75)
-        else:
-            current_ma = -300.0 * (1.0 - (ratio - 0.85) / 0.15)
+        current_ma = -shape(ratio) * scale * 1000.0
 
         voltage_mv = (3.62 + 0.78 * (soc / 100.0)
                       + abs(current_ma) / 1000.0 * DCIR_OHM) * 1000.0

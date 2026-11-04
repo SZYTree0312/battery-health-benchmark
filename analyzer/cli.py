@@ -56,6 +56,14 @@ def _design_from_csv(path: str) -> float | None:
     return None
 
 
+METHOD_LABEL = {
+    "coulomb-integration": "电流积分",
+    "counter-delta": "系统库仑计差值",
+    "charge-delta": "系统库仑计差值（充电段）",
+    "charge-integration": "充电电流积分",
+}
+
+
 def print_report(path: str, result: Result) -> None:
     charge_mode = result.method.startswith("charge")
     dur_label = "充电时长" if charge_mode else "放电时长"
@@ -69,9 +77,15 @@ def print_report(path: str, result: Result) -> None:
     print(f"{'数据文件':<12}{path}")
     print(f"{'采样点':<12}{result.sample_count}")
     print(f"{dur_label:<12}{_fmt_duration(result.duration_s)}")
-    print(f"{'SOC 区间':<12}{result.soc_start:.0f}% → {result.soc_end:.0f}%")
-    print(f"{'数据来源':<12}"
-          f"{'库仑积分' if result.method == 'coulomb-integration' else '库仑计差值'}")
+    print(f"{'SOC 区间':<12}{result.soc_start:.0f}% → {result.soc_end:.0f}%"
+          f"   (跨度 {result.soc_span_pct:.0f}%)")
+    print(f"{'数据来源':<12}{METHOD_LABEL.get(result.method, result.method)}")
+    print(f"{'净电荷':<12}{result.raw_charge_mah:.0f} mAh")
+    print(f"{'采样质量':<12}覆盖 {result.coverage_pct:.0f}% / 最长空档 "
+          f"{result.max_gap_s / 60:.0f} 分钟 / 长空档 {result.long_gaps} 次")
+    if result.cross_check_mah is not None and result.divergence_pct is not None:
+        print(f"{'交叉校验':<12}电流积分 {result.cross_check_mah:.0f} mAh"
+              f"  ({result.divergence_pct:+.0f}%)")
     print()
     print(f"{capacity_label:<12}{result.normalized_mah:>7.0f} mAh"
           f"   (实测 {result.measured_mah:.0f} mAh @ {result.avg_temp_c:.1f}°C)")
@@ -132,6 +146,17 @@ def result_to_dict(path: str, result: Result) -> dict:
         "normalized_mah": round(result.normalized_mah, 1),
         "soh_pct": round(result.soh_pct, 2),
         "grade": result.grade,
+        "method": result.method,
+        "reliable": result.reliable,
+        "raw_charge_mah": round(result.raw_charge_mah, 1),
+        "soc_span_pct": round(result.soc_span_pct, 1),
+        "coverage_pct": round(result.coverage_pct, 1),
+        "max_gap_s": round(result.max_gap_s, 1),
+        "long_gaps": result.long_gaps,
+        "cross_check_mah": (round(result.cross_check_mah, 1)
+                            if result.cross_check_mah is not None else None),
+        "divergence_pct": (round(result.divergence_pct, 1)
+                           if result.divergence_pct is not None else None),
         "energy_wh": round(result.energy_wh, 3),
         "avg_voltage_v": round(result.avg_voltage_v, 3),
         "avg_current_ma": round(result.avg_current_ma, 1),
@@ -148,8 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("csv", nargs="+", help="采集到的 CSV 文件，可给多个做对比")
     parser.add_argument("--design", type=float,
                         help="设计容量 mAh；不给则尝试从 CSV 的 design_mah 列读取")
-    parser.add_argument("--temp-coeff", type=float, default=0.008,
-                        help="温度归一系数，默认 0.008（每°C 0.8%%），设 0 关闭归一")
+    parser.add_argument("--temp-coeff", type=float, default=0.002,
+                        help="温度归一系数，默认 0.002（每°C 0.2%%），设 0 关闭归一")
     parser.add_argument("--json", metavar="PATH", help="把结果写成 JSON")
     args = parser.parse_args(argv)
 
