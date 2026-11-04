@@ -19,8 +19,8 @@ sys.path.insert(0, str(ROOT))
 
 from analyzer.core import Sample, analyze, load_csv  # noqa: E402
 from analyzer.curve import (  # noqa: E402
-    counter_soc, gap_seconds, hours, linear_fit, max_deviation, soc, summarize,
-    time_weights, to_svg,
+    SPLIT_GAP_S, counter_soc, count_segments, gap_seconds, gap_stats, hours,
+    linear_fit, max_deviation, robust_fit, soc, summarize, time_weights, to_svg,
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -147,6 +147,70 @@ class RealSessionTest(unittest.TestCase):
 
     def test_gaps_length(self) -> None:
         self.assertEqual(len(gap_seconds(self.seq)), len(self.seq) - 1)
+
+
+class JitterTest(unittest.TestCase):
+    """采样抖动的量化与处理。
+
+    结论先说：抖动消除不了，只能如实报告。斜率用时间加权整体拟合（不受
+    采样密度影响），抖动单独算成中位/P90/打断次数摆给用户看。
+    """
+
+    def test_gap_stats_shape(self) -> None:
+        # 一份典型的真机分布：大部分 5 秒，偶尔几分钟，还有一次几小时
+        gaps = [5.0] * 100 + [120.0] * 5 + [7.4 * 3600]
+        g = gap_stats(gaps)
+        self.assertAlmostEqual(g.median_s, 5.0)
+        self.assertGreater(g.p99_s, 5.0)
+        self.assertAlmostEqual(g.max_s, 7.4 * 3600, delta=1)
+        self.assertEqual(g.breaks, 6)          # 120 秒那 5 个 + 7.4 小时那个
+        self.assertGreater(g.jitter_pct, 0)
+
+    def test_no_jitter(self) -> None:
+        g = gap_stats([5.0] * 50)
+        self.assertAlmostEqual(g.median_s, 5.0)
+        self.assertAlmostEqual(g.jitter_pct, 0.0)
+        self.assertEqual(g.breaks, 0)
+
+    def test_empty(self) -> None:
+        g = gap_stats([])
+        self.assertEqual(g.max_s, 0)
+        self.assertEqual(g.breaks, 0)
+
+    def test_count_segments(self) -> None:
+        # 两段被一个 2 小时的空档隔开
+        xs = [0, 0.001, 0.002, 0.003, 2.0, 2.001, 2.002]
+        self.assertEqual(count_segments(xs), 2)
+
+    def test_robust_equals_weighted_without_gaps(self) -> None:
+        """没有空档时，robust_fit 必须和普通时间加权拟合完全一致。"""
+        # 全部 1.2 秒一个点（0.0012 h），远小于 60 秒切段阈值
+        xs = [0, 0.0012, 0.0024, 0.0036, 0.0048]
+        ys = [100, 95, 91, 86, 82]
+        a = linear_fit(xs, ys, time_weights(xs))
+        b = robust_fit(xs, ys)
+        self.assertAlmostEqual(a.slope, b.slope, places=9)
+        self.assertAlmostEqual(a.r2, b.r2, places=9)
+        self.assertEqual(b.segment_count, 1)
+
+    def test_robust_does_not_fake_slope_across_gap(self) -> None:
+        """跨空档不能伪造斜率。
+
+        两段各自都以 10 %/h 掉电，中间空档 5 小时。分段拟合如果直接用
+        整体回归，空档那 5 小时会被拉成一条直线；这里的斜率必须仍然是
+        10 %/h 量级，而不是被空档稀释。
+        """
+        xs = [0, 0.25, 0.5, 5.0, 5.25, 5.5]
+        ys = [100, 97.5, 95, 50, 47.5, 45]
+        line = robust_fit(xs, ys)
+        self.assertTrue(line.valid)
+        self.assertGreater(line.segment_count, 1)
+        self.assertLess(line.slope, 0)          # 放电，斜率为负
+        self.assertGreater(abs(line.slope), 5)  # 不能因为空档被稀释成很小的值
+
+    def test_split_threshold_matches_java(self) -> None:
+        # Java 侧 SPLIT_GAP_S = 60，两边必须一致
+        self.assertEqual(SPLIT_GAP_S, 60.0)
 
 
 class SvgTest(unittest.TestCase):

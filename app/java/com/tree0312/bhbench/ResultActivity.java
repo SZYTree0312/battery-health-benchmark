@@ -5,6 +5,9 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
@@ -37,6 +40,9 @@ public class ResultActivity extends Activity {
 
     private static final int REQ_EXPORT = 1001;
 
+    /** 配色跟随系统深浅色。 */
+    private Palette pal;
+
     private File csv;
     private Analyzer.Report report;
 
@@ -44,11 +50,13 @@ public class ResultActivity extends Activity {
     private double[] chartX, chartSoc, chartFit, chartCounter;
     private long[] chartGaps;
     private CurveFit.Line chartLine;
+    private CurveFit.GapStats chartGaps2;
     /** 放电时的耗电率（%/时，正数）；充电段或拟合失败时为 NaN。 */
     private double chartRate = Double.NaN;
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
+        pal = Palette.of(this);
 
         String path = getIntent().getStringExtra(EXTRA_FILE);
         double design = getIntent().getDoubleExtra(EXTRA_DESIGN, 0);
@@ -70,9 +78,10 @@ public class ResultActivity extends Activity {
 
         chartX = CurveFit.hours(report.segment);
         chartSoc = CurveFit.soc(report.segment);
-        // 时间加权：采样点疏密不均（Doze 时几百分钟才一个点），等权回归会被
-        // 密集的活跃期带偏，算出的耗电率偏低。详见 CurveFit.timeWeights 的注释。
-        chartLine = CurveFit.fit(chartX, chartSoc, CurveFit.timeWeights(chartX));
+        // 分段加权拟合：先按采样空档切段，段内自己拟合，段间不连线，
+        // 各段斜率按时长加权平均。空档不会伪造出一段不存在的斜率。
+        // （普通加权拟合也能用，但 7 小时的空档会被压成一条直线当成真实曲线。）
+        chartLine = CurveFit.robustFit(chartX, chartSoc);
         if (chartLine.valid) chartFit = CurveFit.eval(chartX, chartLine);
         chartCounter = CurveFit.counterSoc(report.segment, report.designMah, report.isChargeMode());
 
@@ -80,6 +89,7 @@ public class ResultActivity extends Activity {
         for (int i = 1; i < report.segment.size(); i++) {
             chartGaps[i - 1] = Math.round(report.segment.get(i).t - report.segment.get(i - 1).t);
         }
+        chartGaps2 = CurveFit.gaps(chartGaps);
 
         if (chartLine.valid && !report.isChargeMode()) {
             chartRate = Math.abs(chartLine.slope);
@@ -114,7 +124,7 @@ public class ResultActivity extends Activity {
 
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.WHITE);
+        scroll.setBackgroundColor(pal.bg);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -126,13 +136,13 @@ public class ResultActivity extends Activity {
         title.setText("测量结果");
         title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.rgb(20, 20, 20));
+        title.setTextColor(pal.textPrimary);
         root.addView(title);
 
         TextView file = new TextView(this);
         file.setText(csv.getName());
         file.setTextSize(11);
-        file.setTextColor(Color.rgb(150, 150, 150));
+        file.setTextColor(pal.textTertiary);
         file.setPadding(0, dp(4), 0, dp(20));
         root.addView(file);
 
@@ -175,12 +185,12 @@ public class ResultActivity extends Activity {
         } else {
             big.setText("—");
             big.setTextSize(64);
-            big.setTextColor(Color.rgb(150, 150, 150));
+            big.setTextColor(pal.textTertiary);
             unit.setText("本次净电荷 " + Math.round(report.rawChargeMah) + " mAh");
             grade.setText("数据异常".equals(report.grade)
                     ? "数据异常：结果超出物理合理范围，请核对下方提示"
                     : "数据不足，无法判定健康度");
-            grade.setTextColor(Color.rgb(120, 120, 120));
+            grade.setTextColor(pal.textSecondary);
         }
 
         big.setTypeface(Typeface.DEFAULT_BOLD);
@@ -188,7 +198,7 @@ public class ResultActivity extends Activity {
         box.addView(big);
 
         unit.setTextSize(14);
-        unit.setTextColor(Color.rgb(110, 110, 110));
+        unit.setTextColor(pal.textSecondary);
         unit.setGravity(Gravity.CENTER);
         box.addView(unit);
 
@@ -223,7 +233,7 @@ public class ResultActivity extends Activity {
         TextView title = new TextView(this);
         title.setText("电量变化");
         title.setTextSize(13);
-        title.setTextColor(Color.rgb(130, 130, 130));
+        title.setTextColor(pal.textTertiary);
         title.setPadding(0, 0, 0, dp(6));
         box.addView(title);
 
@@ -236,7 +246,7 @@ public class ResultActivity extends Activity {
             TextView rate = new TextView(this);
             rate.setText(rateText());
             rate.setTextSize(12);
-            rate.setTextColor(Color.rgb(90, 90, 90));
+            rate.setTextColor(pal.textSecondary);
             rate.setLineSpacing(dp(3), 1f);
             rate.setPadding(0, dp(6), 0, 0);
             box.addView(rate);
@@ -249,24 +259,74 @@ public class ResultActivity extends Activity {
                     "系统百分比与库仑计反推最大差 %.1f 个百分点%s",
                     dev, dev >= 5 ? " —— 厂商的百分比在这段被平滑过，别拿它当电荷量" : "，两者基本贴合"));
             dv.setTextSize(11);
-            dv.setTextColor(Color.rgb(140, 140, 140));
+            dv.setTextColor(pal.textTertiary);
             dv.setLineSpacing(dp(3), 1f);
             dv.setPadding(0, dp(4), 0, 0);
             box.addView(dv);
         }
+
+        // 采样抖动：光说「最长空档 7.4 小时」不够，用户看不出这算不算严重。
+        // 把分布摆出来 —— 正常多久一个点、最坏拖到多久、被打断几次。
+        if (chartGaps2 != null && chartGaps2.breaks > 0) {
+            TextView gv = new TextView(this);
+            gv.setText(String.format(Locale.US,
+                    "采样被系统打断 %d 次：正常 %.0f 秒一个点，最坏 1%% 拖到 %.0f 秒，"
+                            + "最长 %.1f 小时。断开的空档已从拟合中剔除，"
+                            + "图上灰色竖带就是这些段。",
+                    chartGaps2.breaks, chartGaps2.medianS, chartGaps2.p99S,
+                    chartGaps2.maxS / 3600.0));
+            gv.setTextSize(11);
+            gv.setTextColor(pal.textTertiary);
+            gv.setLineSpacing(dp(3), 1f);
+            gv.setPadding(0, dp(6), 0, 0);
+            box.addView(gv);
+        }
+        addBatteryOptHint(box);
 
         String cmp = TuningStore.comment(this, chartLine != null ? chartLine.r2 : -1, chartRate);
         if (cmp != null) {
             TextView tv = new TextView(this);
             tv.setText(cmp);
             tv.setTextSize(11);
-            tv.setTextColor(Color.rgb(140, 140, 140));
+            tv.setTextColor(pal.textTertiary);
             tv.setLineSpacing(dp(3), 1f);
             tv.setPadding(0, dp(4), 0, 0);
             box.addView(tv);
         }
 
         return box;
+    }
+
+    /**
+     * 省电策略提示。
+     *
+     * 采样被打断的根因是系统把前台服务掐了 —— Doze 是一部分，国产 ROM 更狠：
+     * 息屏后连前台服务都可能限制调度，用别的 App 时后台也被压。App 改不了
+     * 这个行为，只能告诉用户「这里有个开关可以少掉点」，然后跳过去。
+     */
+    private void addBatteryOptHint(LinearLayout box) {
+        if (Build.VERSION.SDK_INT < 23) return;
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        if (pm == null) return;
+        if (pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+
+        TextView tv = new TextView(this);
+        tv.setText("系统省电策略没放行——采样被打断多半是这个原因。点这里去设置里放行。");
+        tv.setTextSize(11);
+        tv.setTextColor(pal.warn);
+        tv.setLineSpacing(dp(3), 1f);
+        tv.setPadding(0, dp(8), 0, 0);
+        tv.setOnClickListener(v -> {
+            try {
+                Intent i = new Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                i.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(i);
+            } catch (Exception e) {
+                toast("这台设备没有这个设置页，去「设置 → 电池 → 应用省电策略」手动放行");
+            }
+        });
+        box.addView(tv);
     }
 
     /**
@@ -319,7 +379,7 @@ public class ResultActivity extends Activity {
     private View metricCard(String value, String label, boolean withGap) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(Color.rgb(246, 246, 244));
+        card.setBackgroundColor(pal.surfaceAlt);
         card.setPadding(dp(12), dp(14), dp(12), dp(14));
         card.setGravity(Gravity.CENTER);
 
@@ -332,14 +392,14 @@ public class ResultActivity extends Activity {
         v.setText(value);
         v.setTextSize(20);
         v.setTypeface(Typeface.DEFAULT_BOLD);
-        v.setTextColor(Color.rgb(25, 25, 25));
+        v.setTextColor(pal.textPrimary);
         v.setGravity(Gravity.CENTER);
         card.addView(v);
 
         TextView l = new TextView(this);
         l.setText(label);
         l.setTextSize(11);
-        l.setTextColor(Color.rgb(120, 120, 120));
+        l.setTextColor(pal.textSecondary);
         l.setGravity(Gravity.CENTER);
         l.setPadding(0, dp(4), 0, 0);
         card.addView(l);
@@ -361,7 +421,7 @@ public class ResultActivity extends Activity {
         TextView header = new TextView(this);
         header.setText("明细");
         header.setTextSize(13);
-        header.setTextColor(Color.rgb(130, 130, 130));
+        header.setTextColor(pal.textTertiary);
         header.setPadding(0, 0, 0, dp(10));
         box.addView(header);
 
@@ -384,6 +444,11 @@ public class ResultActivity extends Activity {
         addRow(box, "采样质量",
                 String.format(Locale.US, "%d 点 / 有效覆盖 %.0f%% / 最长空档 %.1f h",
                         report.samples, report.coveragePct, report.maxGapS / 3600.0), false);
+        if (chartGaps2 != null && chartGaps2.breaks > 0) {
+            addRow(box, "间隔抖动",
+                    String.format(Locale.US, "中位 %.0f 秒 / P99 %.0f 秒 / 打断 %d 次",
+                            chartGaps2.medianS, chartGaps2.p99S, chartGaps2.breaks), false);
+        }
         if (report.crossCheckMah >= 0 && !Double.isNaN(report.divergencePct)) {
             addRow(box, "交叉校验(电流积分)",
                     String.format(Locale.US, "%.0f mAh (%+.0f%%)",
@@ -413,14 +478,14 @@ public class ResultActivity extends Activity {
         TextView l = new TextView(this);
         l.setText(label);
         l.setTextSize(14);
-        l.setTextColor(Color.rgb(105, 105, 105));
+        l.setTextColor(pal.textSecondary);
         row.addView(l, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView v = new TextView(this);
         v.setText(value);
         v.setTextSize(14);
-        v.setTextColor(Color.rgb(25, 25, 25));
+        v.setTextColor(pal.textPrimary);
         v.setGravity(Gravity.END);
         row.addView(v);
 
@@ -428,7 +493,7 @@ public class ResultActivity extends Activity {
 
         if (!last) {
             View line = new View(this);
-            line.setBackgroundColor(Color.rgb(235, 235, 233));
+            line.setBackgroundColor(pal.border);
             parent.addView(line, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, 1));
         }
@@ -437,7 +502,7 @@ public class ResultActivity extends Activity {
     private View buildWarnings() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setBackgroundColor(Color.rgb(253, 246, 236));
+        box.setBackgroundColor(pal.warnSurface);
         box.setPadding(dp(14), dp(14), dp(14), dp(14));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -448,7 +513,7 @@ public class ResultActivity extends Activity {
         header.setText("这次测量有什么问题");
         header.setTextSize(13);
         header.setTypeface(Typeface.DEFAULT_BOLD);
-        header.setTextColor(Color.rgb(140, 105, 10));
+        header.setTextColor(pal.warn);
         header.setPadding(0, 0, 0, dp(8));
         box.addView(header);
 
@@ -456,7 +521,7 @@ public class ResultActivity extends Activity {
             TextView line = new TextView(this);
             line.setText("· " + w);
             line.setTextSize(13);
-            line.setTextColor(Color.rgb(110, 85, 20));
+            line.setTextColor(pal.warn);
             line.setLineSpacing(dp(3), 1f);
             line.setPadding(0, dp(3), 0, dp(3));
             box.addView(line);
@@ -470,7 +535,7 @@ public class ResultActivity extends Activity {
                 + "或者整个过程中库仑计和电流都没读到值。\n\n"
                 + "重新跑一次，至少让它在后台待够十几分钟。");
         tv.setTextSize(14);
-        tv.setTextColor(Color.rgb(120, 120, 120));
+        tv.setTextColor(pal.textSecondary);
         tv.setLineSpacing(dp(6), 1f);
         tv.setPadding(0, dp(20), 0, dp(24));
         return tv;
@@ -501,10 +566,10 @@ public class ResultActivity extends Activity {
     }
 
     private int gradeColor(double soh) {
-        if (soh >= 90) return Color.rgb(29, 158, 117);
-        if (soh >= 80) return Color.rgb(239, 159, 39);
-        if (soh >= 70) return Color.rgb(216, 90, 48);
-        return Color.rgb(226, 75, 74);
+        if (soh >= 90) return pal.good;
+        if (soh >= 80) return pal.warn;
+        if (soh >= 70) return pal.warn;
+        return pal.bad;
     }
 
     // ------------------------------------------------------------ 导出

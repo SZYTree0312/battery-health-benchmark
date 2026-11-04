@@ -46,6 +46,8 @@ public class MainActivity extends Activity {
 
     private BatteryManager bm;
     private SharedPreferences prefs;
+    /** 配色跟随系统深浅色。 */
+    private Palette pal;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private final Runnable refresh = new Runnable() {
@@ -57,6 +59,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
+        pal = Palette.of(this);
         bm = (BatteryManager) getSystemService(BATTERY_SERVICE);
         prefs = getSharedPreferences("bhbench", MODE_PRIVATE);
         setContentView(buildUi());
@@ -113,7 +116,7 @@ public class MainActivity extends Activity {
                 + "· 插着充电器 —— 记充电段，充到 100% 即可\n"
                 + "分析时优先用完整的放电段；不完整就自动退回用充电段。");
         hint.setTextSize(12);
-        hint.setTextColor(Color.GRAY);
+        hint.setTextColor(pal.textTertiary);
         hint.setLineSpacing(dp(3), 1f);
         hint.setPadding(0, dp(6), 0, dp(16));
         root.addView(hint);
@@ -121,13 +124,13 @@ public class MainActivity extends Activity {
         // 实时面板
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(Color.rgb(245, 245, 245));
+        panel.setBackgroundColor(pal.surface);
         panel.setPadding(dp(14), dp(14), dp(14), dp(14));
         root.addView(panel);
 
         tvLive = new TextView(this);
         tvLive.setTextSize(14);
-        tvLive.setTextColor(Color.rgb(30, 30, 30));
+        tvLive.setTextColor(pal.textPrimary);
         tvLive.setLineSpacing(dp(4), 1f);
         panel.addView(tvLive);
 
@@ -167,7 +170,7 @@ public class MainActivity extends Activity {
 
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.setPadding(0, dp(8), 0, dp(14));
+        row2.setPadding(0, dp(8), 0, 0);
         root.addView(row2);
 
         btnAnalyze = new Button(this);
@@ -183,10 +186,19 @@ public class MainActivity extends Activity {
         lp2.leftMargin = dp(8);
         row2.addView(btnHistory, lp2);
 
+        Button btnCharger = new Button(this);
+        btnCharger.setText("充电器体检");
+        btnCharger.setOnClickListener(v ->
+                startActivity(new Intent(this, ChargerProbeActivity.class)));
+        LinearLayout.LayoutParams lp3 = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+        lp3.topMargin = dp(8);
+        root.addView(btnCharger, lp3);
+
         // 设备信息
         tvDevice = new TextView(this);
         tvDevice.setTextSize(11);
-        tvDevice.setTextColor(Color.GRAY);
+        tvDevice.setTextColor(pal.textTertiary);
         tvDevice.setPadding(0, 0, 0, dp(10));
         tvDevice.setText(Build.MANUFACTURER + " " + Build.MODEL
                 + "   Android " + Build.VERSION.RELEASE
@@ -196,10 +208,10 @@ public class MainActivity extends Activity {
         // 结果
         tvResult = new TextView(this);
         tvResult.setTextSize(13);
-        tvResult.setTextColor(Color.rgb(20, 20, 20));
+        tvResult.setTextColor(pal.textPrimary);
         tvResult.setLineSpacing(dp(5), 1f);
         tvResult.setPadding(dp(14), dp(14), dp(14), dp(14));
-        tvResult.setBackgroundColor(Color.rgb(250, 250, 250));
+        tvResult.setBackgroundColor(pal.surfaceAlt);
         root.addView(tvResult);
 
         return scroll;

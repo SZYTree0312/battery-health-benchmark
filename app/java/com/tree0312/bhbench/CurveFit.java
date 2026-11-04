@@ -1,5 +1,6 @@
 package com.tree0312.bhbench;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -26,6 +27,8 @@ public final class CurveFit {
         public boolean valid = false;
         /** 这段回归覆盖的 x 跨度；太短的回归没有意义。 */
         public double span = 0;
+        /** 分段拟合时用到的连续段数。1 表示全程没有空档。 */
+        public int segmentCount = 0;
     }
 
     /**
@@ -120,6 +123,51 @@ public final class CurveFit {
         return out;
     }
 
+    // ------------------------------------------------------------ 采样抖动
+
+    /**
+     * 采样间隔的分布。
+     *
+     * 光看「最长空档」不够 —— 前台服务在国产 ROM 上也常被掐，产物是一串
+     * 几十秒到几分钟的小空档，最长空档看不出来，但曲线已经被打得稀碎。
+     * 所以要看分布：中位数说明「正常该多久一个点」，P90 说明「最坏能拖到多久」，
+     * 两者之比就是抖动程度。
+     */
+    public static class GapStats {
+        public double medianS = 0;
+        /**
+         * P99 而不是 P90：绝大多数间隔都正常时，P90 就等于中位数，
+         * 抖动完全看不见。真机数据 90% 的间隔是 5 秒，P90 也是 5 秒，
+         * 但实际有 6 次被打断到几分钟以上 —— P99 才看得见。
+         */
+        public double p99S = 0;
+        public double maxS = 0;
+        /** 超过 SPLIT_GAP_S 的次数，也就是「被系统打断」的次数。 */
+        public int breaks = 0;
+        /** (P99 − 中位) / 中位 ×100。大于 100% 说明抖动已经很严重。 */
+        public double jitterPct = 0;
+    }
+
+    /** 间隔超过这个值就认为采样被系统打断了，切段从这里断开。 */
+    public static final double SPLIT_GAP_S = 60;
+
+    public static GapStats gaps(long[] gapSec) {
+        GapStats g = new GapStats();
+        if (gapSec == null || gapSec.length == 0) return g;
+
+        long[] sorted = gapSec.clone();
+        java.util.Arrays.sort(sorted);
+        g.medianS = sorted[sorted.length / 2];
+        g.p99S = sorted[(int) Math.min(sorted.length - 1L,
+                Math.floor(sorted.length * 0.99))];
+        g.maxS = sorted[sorted.length - 1];
+        for (long v : sorted) if (v > SPLIT_GAP_S) g.breaks++;
+        if (g.medianS > 0) {
+            g.jitterPct = (g.p99S - g.medianS) / g.medianS * 100.0;
+        }
+        return g;
+    }
+
     /** 实测 SOC 序列。 */
     public static double[] soc(List<Analyzer.Row> seg) {
         double[] out = new double[seg.size()];
@@ -151,19 +199,50 @@ public final class CurveFit {
 
         double c0 = seg.get(first).counter;
         double soc0 = seg.get(first).soc;
-        double sign = chargeMode ? 1.0 : -1.0;
 
         double[] out = new double[seg.size()];
         double last = soc0;
         for (int i = 0; i < seg.size(); i++) {
             double c = seg.get(i).counter;
             if (c > 0) {
-                last = soc0 + sign * (chargeMode ? (c - c0) : (c0 - c)) / designMah * 100.0;
+                // 充电：counter 上升 → SOC 上升；放电：counter 下降 → SOC 下降
+                double delta = chargeMode ? (c - c0) : (c0 - c);
+                last = soc0 + delta / designMah * 100.0;
             }
-            // 前几个点没有库仑计时沿用上一个有效值，避免曲线从 0 跳上来
+            // 前几个点没有库仑计时沿用起点值，避免曲线从 0 跳上来
             out[i] = i < first ? soc0 : last;
         }
         return out;
+    }
+
+    /**
+     * 带抖动处理的整体拟合。
+     *
+     * 这里试过「分段各自拟合再按段时长加权平均」，真机数据上直接崩：
+     * slope 从 3.99 变成 -11.1 %/h，R² 从 0.78 变成 -1.73。原因是段内
+     * 5 秒一个点、SOC 只有 1% 分辨率，一段几百秒里 SOC 纹丝不动，段内
+     * 斜率全是量化噪声，按段加权把它放大成了主信号。
+     *
+     * 所以正确的处理是：斜率仍用整段的时间加权拟合（这是对非均匀采样的
+     * 正确处理，见 timeWeights），抖动的影响单独量化、单独展示（见 gaps）。
+     * 别指望用算法「消除」采样抖动 —— 消除不了，只能如实报告。
+     *
+     * 段数只用于告诉用户「这段数据被系统打断了几次」。
+     */
+    public static Line robustFit(double[] xs, double[] ys) {
+        Line base = fit(xs, ys, timeWeights(xs));
+        if (base.valid) base.segmentCount = countSegments(xs);
+        return base;
+    }
+
+    /** 按 SPLIT_GAP_S 切分，返回连续采样段的数量。 */
+    public static int countSegments(double[] xs) {
+        if (xs.length == 0) return 0;
+        int n = 1;
+        for (int i = 1; i < xs.length; i++) {
+            if (xs[i] - xs[i - 1] >= SPLIT_GAP_S / 3600.0) n++;
+        }
+        return n;
     }
 
     /** 两条等长序列的最大绝对偏差。 */

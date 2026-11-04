@@ -36,21 +36,16 @@ public class SocChartView extends View {
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
 
-    private static final int C_ACTUAL = Color.rgb(38, 84, 190);
-    private static final int C_FIT = Color.rgb(150, 150, 150);
-    private static final int C_COUNTER = Color.rgb(214, 130, 36);
-    private static final int C_GRID = Color.rgb(232, 232, 230);
-    private static final int C_AXIS = Color.rgb(190, 190, 188);
-    private static final int C_LABEL = Color.rgb(130, 130, 130);
-    private static final int C_GAP = Color.rgb(238, 238, 236);
-
     private float density;
+    /** 配色跟随系统深浅色。用户在系统里切换后 Activity 重建，这里会重新取。 */
+    private final Palette p;
 
     public SocChartView(Context c) {
         super(c);
+        p = Palette.of(c);
         density = c.getResources().getDisplayMetrics().density;
         text.setTextSize(9 * density);
-        text.setColor(C_LABEL);
+        text.setColor(p.chartLabel);
     }
 
     /**
@@ -94,7 +89,7 @@ public class SocChartView extends View {
         // ---- 空档带：先画，压在网格下面
         if (gaps != null) {
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(C_GAP);
+            paint.setColor(p.chartGap);
             for (int i = 1; i < xs.length; i++) {
                 if (i - 1 >= gaps.length) break;
                 if (gaps[i - 1] < 1800) continue;      // 30 分钟以内不算空档
@@ -107,7 +102,7 @@ public class SocChartView extends View {
         // ---- 网格与 Y 轴刻度
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(1);
-        paint.setColor(C_GRID);
+        paint.setColor(p.chartGrid);
         for (int pct = 0; pct <= 100; pct += 25) {
             float y = bottom - (float) (pct / 100.0 * plotH);
             canvas.drawLine(left, y, right, y, paint);
@@ -115,7 +110,7 @@ public class SocChartView extends View {
         }
 
         // ---- 坐标轴
-        paint.setColor(C_AXIS);
+        paint.setColor(p.chartAxis);
         canvas.drawLine(left, top, left, bottom, paint);
         canvas.drawLine(left, bottom, right, bottom, paint);
 
@@ -145,7 +140,7 @@ public class SocChartView extends View {
             }
             path.close();
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(18, 38, 84, 190));
+            paint.setColor(p.fillOf(p.accent, 18, 30));
             canvas.drawPath(path, paint);
         }
 
@@ -153,7 +148,7 @@ public class SocChartView extends View {
         if (fit != null) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1.4f * density);
-            paint.setColor(C_FIT);
+            paint.setColor(p.chartFit);
             paint.setPathEffect(new DashPathEffect(new float[]{6 * density, 4 * density}, 0));
             strokeSeries(canvas, fit, left, top, bottom, plotW, plotH, xMax);
             paint.setPathEffect(null);
@@ -163,14 +158,14 @@ public class SocChartView extends View {
         if (counter != null) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1.6f * density);
-            paint.setColor(C_COUNTER);
+            paint.setColor(p.chartCounter);
             strokeSeries(canvas, counter, left, top, bottom, plotW, plotH, xMax);
         }
 
         // ---- 实测主线
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(2.4f * density);
-        paint.setColor(C_ACTUAL);
+        paint.setColor(p.accent);
         paint.setStrokeCap(Paint.Cap.ROUND);
         strokeSeries(canvas, soc, left, top, bottom, plotW, plotH, xMax);
         paint.setStrokeCap(Paint.Cap.BUTT);
@@ -178,9 +173,9 @@ public class SocChartView extends View {
         // ---- 图例
         float lx = left;
         float ly = 8 * density;
-        lx = legend(canvas, lx, ly, C_ACTUAL, 2.4f, false, "实测");
-        if (fit != null) lx = legend(canvas, lx, ly, C_FIT, 1.4f, true, "匀速参考");
-        if (counter != null) legend(canvas, lx, ly, C_COUNTER, 1.6f, false, "库仑计反推");
+        lx = legend(canvas, lx, ly, p.accent, 2.4f, false, "实测");
+        if (fit != null) lx = legend(canvas, lx, ly, p.chartFit, 1.4f, true, "匀速参考");
+        if (counter != null) legend(canvas, lx, ly, p.chartCounter, 1.6f, false, "库仑计反推");
     }
 
     private float legend(Canvas canvas, float x, float y, int color, float w, boolean dashed, String label) {

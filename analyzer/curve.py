@@ -26,6 +26,7 @@ class Line:
     r2: float = 0.0
     valid: bool = False
     span: float = 0.0
+    segment_count: int = 0   # 分段拟合用到的连续段数，1 表示没有空档
 
     @property
     def rate_pct_per_h(self) -> float:
@@ -155,6 +156,70 @@ def gap_seconds(seq: Sequence[Sample]) -> list[float]:
     return [seq[i].t - seq[i - 1].t for i in range(1, len(seq))]
 
 
+# ---------------------------------------------------------------- 采样抖动
+
+SPLIT_GAP_S = 60.0
+"""间隔超过这个值就认为采样被系统打断了，切段从这里断开。"""
+
+
+@dataclass
+class GapStats:
+    median_s: float = 0.0
+    # P99 而不是 P90：绝大多数间隔都正常时 P90 就等于中位数，抖动完全看不见。
+    p99_s: float = 0.0
+    max_s: float = 0.0
+    breaks: int = 0          # 被系统打断的次数
+    jitter_pct: float = 0.0  # (P99 − 中位) / 中位 ×100
+
+
+def gap_stats(gap_sec: Sequence[float]) -> GapStats:
+    """采样间隔分布。
+
+    只看「最长空档」不够：前台服务在国产 ROM 上常被掐，产物是一串几十秒到
+    几分钟的小空档，最长空档看不出来，但曲线已经被打得稀碎。要看分布 ——
+    中位说明「正常多久一个点」，P90 说明「最坏拖到多久」，两者之比就是抖动。
+    """
+    g = GapStats()
+    if not gap_sec:
+        return g
+    s = sorted(gap_sec)
+    g.median_s = s[len(s) // 2]
+    g.p99_s = s[int(min(len(s) - 1, len(s) * 0.99))]
+    g.max_s = s[-1]
+    g.breaks = sum(1 for v in s if v > SPLIT_GAP_S)
+    if g.median_s > 0:
+        g.jitter_pct = (g.p99_s - g.median_s) / g.median_s * 100.0
+    return g
+
+
+def robust_fit(xs: Sequence[float], ys: Sequence[float]) -> Line:
+    """带抖动处理的整体拟合。
+
+    这里试过「分段各自拟合再按段时长加权平均」，真机数据上直接崩：
+    slope 从 3.99 变成 -11.1 %/h，R² 从 0.78 变成 -1.73。原因是段内
+    5 秒一个点、SOC 只有 1% 分辨率，一段几百秒里 SOC 纹丝不动，段内斜率
+    全是量化噪声，按段加权把它放大成了主信号。
+
+    所以斜率仍用整段时间加权拟合，抖动的影响单独量化（见 gap_stats）。
+    抖动消除不了，只能如实报告。
+    """
+    base = linear_fit(xs, ys, time_weights(xs))
+    if base.valid:
+        base.segment_count = count_segments(xs)
+    return base
+
+
+def count_segments(xs: Sequence[float]) -> int:
+    """按 SPLIT_GAP_S 切分，返回连续采样段的数量。"""
+    if not xs:
+        return 0
+    n = 1
+    for i in range(1, len(xs)):
+        if xs[i] - xs[i - 1] >= SPLIT_GAP_S / 3600.0:
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------- SVG
 
 def to_svg(seq: Sequence[Sample], design_mah: float, charge_mode: bool = False,
@@ -163,7 +228,7 @@ def to_svg(seq: Sequence[Sample], design_mah: float, charge_mode: bool = False,
     """把和 App 里一样的图渲染成 SVG，装机前先在电脑上看效果。"""
     xs = hours(seq)
     ys = soc(seq)
-    line = linear_fit(xs, ys, time_weights(xs))
+    line = robust_fit(xs, ys)
     fit = evaluate(xs, line) if line.valid else None
     ctr = counter_soc(seq, design_mah, charge_mode)
     gaps = gap_seconds(seq)
@@ -261,14 +326,20 @@ def summarize(seq: Sequence[Sample], design_mah: float,
     """一组便于打日志/写测试的标量。"""
     xs = hours(seq)
     ys = soc(seq)
-    line = linear_fit(xs, ys, time_weights(xs))
+    line = robust_fit(xs, ys)
     ctr = counter_soc(seq, design_mah, charge_mode)
+    gaps = gap_stats(gap_seconds(seq))
     return {
         "points": len(seq),
         "hours": xs[-1] if xs else 0.0,
         "rate_pct_per_h": line.rate_pct_per_h,
         "r2": line.r2,
         "slope": line.slope,
+        "segments": line.segment_count,
         "counter_dev_pct": max_deviation(ys, ctr),
-        "max_gap_s": max(gap_seconds(seq), default=0.0),
+        "max_gap_s": gaps.max_s,
+        "gap_median_s": gaps.median_s,
+        "gap_p99_s": gaps.p99_s,
+        "breaks": gaps.breaks,
+        "jitter_pct": gaps.jitter_pct,
     }

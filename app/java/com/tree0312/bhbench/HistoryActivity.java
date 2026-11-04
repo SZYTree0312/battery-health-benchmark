@@ -61,6 +61,8 @@ public class HistoryActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private LinearLayout listBox;
+    /** 配色跟随系统深浅色。 */
+    private Palette pal;
     private TextView tvHead;
     private Button btnSelectAll;
     private Button btnExport;
@@ -71,6 +73,7 @@ public class HistoryActivity extends Activity {
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
+        pal = Palette.of(this);
         setContentView(buildUi());
         reload();
     }
@@ -89,7 +92,7 @@ public class HistoryActivity extends Activity {
 
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.WHITE);
+        scroll.setBackgroundColor(pal.bg);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -100,12 +103,12 @@ public class HistoryActivity extends Activity {
         title.setText("历史记录");
         title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(Color.rgb(20, 20, 20));
+        title.setTextColor(pal.textPrimary);
         root.addView(title);
 
         tvHead = new TextView(this);
         tvHead.setTextSize(11);
-        tvHead.setTextColor(Color.rgb(150, 150, 150));
+        tvHead.setTextColor(pal.textTertiary);
         tvHead.setPadding(0, dp(4), 0, dp(16));
         root.addView(tvHead);
 
@@ -161,7 +164,7 @@ public class HistoryActivity extends Activity {
             empty.setText("回到主界面点「开始记录」，跑一次就有了。\n"
                     + "一份完整的放电或充电记录都算一次。");
             empty.setTextSize(14);
-            empty.setTextColor(Color.rgb(130, 130, 130));
+            empty.setTextColor(pal.textTertiary);
             empty.setLineSpacing(dp(5), 1f);
             empty.setPadding(0, dp(20), 0, 0);
             listBox.addView(empty);
@@ -190,7 +193,7 @@ public class HistoryActivity extends Activity {
     private View buildRow(Item it) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setBackgroundColor(Color.rgb(249, 249, 247));
+        row.setBackgroundColor(pal.surfaceAlt);
         row.setPadding(dp(10), dp(12), dp(12), dp(12));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -218,14 +221,14 @@ public class HistoryActivity extends Activity {
         TextView name = new TextView(this);
         name.setText(timeText(it.file) + "    " + durationHint(it.file));
         name.setTextSize(15);
-        name.setTextColor(Color.rgb(25, 25, 25));
+        name.setTextColor(pal.textPrimary);
         name.setTypeface(Typeface.DEFAULT_BOLD);
         text.addView(name);
 
         TextView summary = new TextView(this);
         summary.setText("读取中…");
         summary.setTextSize(12);
-        summary.setTextColor(Color.rgb(120, 120, 120));
+        summary.setTextColor(pal.textSecondary);
         summary.setPadding(0, dp(3), 0, 0);
         text.addView(summary);
         it.summaryView = summary;
@@ -233,7 +236,7 @@ public class HistoryActivity extends Activity {
         TextView size = new TextView(this);
         size.setText(sizeText(it.file.length()));
         size.setTextSize(11);
-        size.setTextColor(Color.rgb(160, 160, 160));
+        size.setTextColor(pal.textTertiary);
         size.setPadding(0, dp(3), 0, 0);
         text.addView(size);
         it.sizeView = size;
