@@ -88,11 +88,17 @@ public class MainActivity extends Activity {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
+    /** 状态栏高度。主题没开 fitsSystemWindows，标题会被状态栏压住。 */
+    private int statusBarH() {
+        int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        return id > 0 ? getResources().getDimensionPixelSize(id) : dp(24);
+    }
+
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(18), dp(18), dp(24));
+        root.setPadding(dp(18), dp(12) + statusBarH(), dp(18), dp(24));
         scroll.addView(root);
 
         TextView title = new TextView(this);
@@ -102,8 +108,10 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView hint = new TextView(this);
-        hint.setText("点开始后就一直记录，中途不要停。\n"
-                + "电量到 15% 左右插上充电器（App 会提醒），充满后点分析最新。");
+        hint.setText("点开始后连续记录，充电、放电都记，中途不用停。\n"
+                + "· 满电拔线用下去 —— 记放电段，到 15% 会提醒插电\n"
+                + "· 插着充电器 —— 记充电段，充到 100% 即可\n"
+                + "分析时优先用完整的放电段；不完整就自动退回用充电段。");
         hint.setTextSize(12);
         hint.setTextColor(Color.GRAY);
         hint.setLineSpacing(dp(3), 1f);
@@ -137,14 +145,15 @@ public class MainActivity extends Activity {
                 ? prefs.getInt("design", 0) : ""));
         root.addView(etDesign);
 
-        // 按钮行
+        // 按钮：两行。开始/停止是一组，分析/历史是另一组 —— 混在一行会把
+        // 每个按钮挤到只剩图标宽度。
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(14), 0, dp(14));
+        row.setPadding(0, dp(14), 0, 0);
         root.addView(row);
 
         btnStart = new Button(this);
-        btnStart.setText("开始");
+        btnStart.setText("开始记录");
         btnStart.setOnClickListener(v -> startSampling());
         row.addView(btnStart, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
@@ -156,12 +165,23 @@ public class MainActivity extends Activity {
         lp.leftMargin = dp(8);
         row.addView(btnStop, lp);
 
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        row2.setPadding(0, dp(8), 0, dp(14));
+        root.addView(row2);
+
         btnAnalyze = new Button(this);
         btnAnalyze.setText("分析最新");
         btnAnalyze.setOnClickListener(v -> analyzeLatest());
+        row2.addView(btnAnalyze, new LinearLayout.LayoutParams(0, dp(48), 1f));
+
+        Button btnHistory = new Button(this);
+        btnHistory.setText("历史记录");
+        btnHistory.setOnClickListener(v ->
+                startActivity(new Intent(this, HistoryActivity.class)));
         LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, dp(48), 1f);
         lp2.leftMargin = dp(8);
-        row.addView(btnAnalyze, lp2);
+        row2.addView(btnHistory, lp2);
 
         // 设备信息
         tvDevice = new TextView(this);
@@ -228,6 +248,11 @@ public class MainActivity extends Activity {
             sb.append("\n\n正在记录  ")
               .append(String.format(Locale.US, "%d:%02d:%02d", secs / 3600, (secs % 3600) / 60, secs % 60))
               .append("   ").append(SamplerService.sampleCount).append(" 点");
+            // 把两段的进度都摆出来，用户一眼能看到充电段确实也在记
+            sb.append("\n已记入    放电 ")
+              .append(dur(SamplerService.dischargePoints * SamplerService.intervalS))
+              .append("   充电 ")
+              .append(dur(SamplerService.chargePoints * SamplerService.intervalS));
         } else if (SamplerService.currentFile != null) {
             sb.append("\n\n上次记录：").append(new File(SamplerService.currentFile).getName());
         }
@@ -266,6 +291,8 @@ public class MainActivity extends Activity {
         }
         prefs.edit().putInt("design", design).apply();
 
+        boolean plugged = isPlugged();
+
         Intent i = new Intent(this, SamplerService.class);
         i.setAction(SamplerService.ACTION_START);
         i.putExtra(SamplerService.EXTRA_DESIGN, (double) design);
@@ -274,7 +301,29 @@ public class MainActivity extends Activity {
         } else {
             startService(i);
         }
-        toast("已开始。现在可以拔掉充电线了");
+        // 充电中也能开始 —— 记的是充电段。以前这里写死"可以拔掉充电线了"，
+        // 插着线的人会以为 App 不肯测充电，反复点、反复弹同一句。
+        toast(plugged
+                ? "已开始记录充电段。保持插着充到 100% 即可"
+                : "已开始记录放电段。到 15% 左右再插充电器");
+    }
+
+    /** 当前是否插着充电器（充电中或已充满）。 */
+    private boolean isPlugged() {
+        Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (b == null) return false;
+        int st = b.getIntExtra(BatteryManager.EXTRA_STATUS,
+                BatteryManager.BATTERY_STATUS_UNKNOWN);
+        return st == BatteryManager.BATTERY_STATUS_CHARGING
+                || st == BatteryManager.BATTERY_STATUS_FULL;
+    }
+
+    private static String dur(long sec) {
+        if (sec <= 0) return "—";
+        long h = sec / 3600, m = (sec % 3600) / 60;
+        if (h > 0) return h + " 时 " + m + " 分";
+        if (m > 0) return m + " 分";
+        return sec + " 秒";
     }
 
     private void stopSampling() {

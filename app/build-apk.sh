@@ -38,8 +38,11 @@ export JAVA_HOME="$JDK"
 # Windows 程序只认 Windows 路径，绝对路径统一转换一次
 WIN_PLATFORM="$(cygpath -w "$PLATFORM_JAR" 2>/dev/null || echo "$PLATFORM_JAR")"
 
-OUT=../build/apk
-rm -rf "$OUT"
+# 每次构建开一个新目录，而不是先 rm -rf 老目录。
+# 原因：Windows 上一些安全软件/文件系统权限会让 rm -rf 直接失败，
+# 构建脚本不该因为清不掉旧产物就整条挂掉。build/ 已在 .gitignore，
+# 攒够了手动删一次即可（或在 PowerShell 里 Remove-Item）。
+OUT="../build/apk-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex"
 
 echo "[1/6] 编译资源"
@@ -54,8 +57,8 @@ echo "[2/6] 链接资源，生成 R.java"
   --java "$OUT/gen" \
   --min-sdk-version 26 \
   --target-sdk-version 34 \
-  --version-code 1 \
-  --version-name 0.1.0 \
+  --version-code 4 \
+  --version-name 0.4.0 \
   --auto-add-overlay
 
 echo "[3/6] 编译 Java"
@@ -78,16 +81,18 @@ find "$OUT/classes" -name '*.class' > "$OUT/classlist.txt"
 "$BT/d8.bat" --lib "$WIN_PLATFORM" --min-api 26 --output "$OUT/dex" @"$OUT/classlist.txt"
 
 echo "[5/6] 打包 dex"
-python - "$OUT" <<'PY'
+# 注意：这里用 -c 而不是 heredoc。heredoc 喂 stdin 的写法在本机会让
+# shutil.copyfile 的目标变成空 zip（旧的 AndroidManifest.xml 直接丢失，
+# apksigner 报 Missing AndroidManifest.xml），-c 传参稳定。
+python -c '
 import shutil, sys, zipfile
 out = sys.argv[1]
-src = f"{out}/base.apk"
-dst = f"{out}/withdex.apk"
-shutil.copyfile(src, dst)
-with zipfile.ZipFile(dst, "a", zipfile.ZIP_DEFLATED) as z:
-    z.write(f"{out}/dex/classes.dex", "classes.dex")
-print("  classes.dex 已写入")
-PY
+shutil.copyfile(out + "/base.apk", out + "/withdex.apk")
+with zipfile.ZipFile(out + "/withdex.apk", "a", zipfile.ZIP_DEFLATED) as z:
+    z.write(out + "/dex/classes.dex", "classes.dex")
+n = len(zipfile.ZipFile(out + "/withdex.apk").namelist())
+print("  classes.dex 已写入, 共", n, "项")
+' "$OUT"
 
 echo "[6/6] 对齐并签名"
 "$BT/zipalign.exe" -f -p 4 "$OUT/withdex.apk" "$OUT/aligned.apk"

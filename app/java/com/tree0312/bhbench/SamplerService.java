@@ -53,6 +53,11 @@ public class SamplerService extends Service {
     public static volatile int lastSoc = -1;
     public static volatile long lastCounterUah = 0L;
     public static volatile int sampleCount = 0;
+    /** 本次记录里放电 / 充电各累计了多少个点。界面用它告诉用户"两段都在记"。 */
+    public static volatile int dischargePoints = 0;
+    public static volatile int chargePoints = 0;
+    /** 当前采样间隔（秒），界面换算时长用。 */
+    public static volatile long intervalS = 5;
 
     private Handler handler;
     private BatteryManager bm;
@@ -89,6 +94,13 @@ public class SamplerService extends Service {
         if (!running) {
             double design = intent != null ? intent.getDoubleExtra(EXTRA_DESIGN, 0) : 0;
             long secs = intent != null ? intent.getLongExtra(EXTRA_INTERVAL, 5) : 5;
+            // 没有 design 说明这是系统按 START_STICKY 把我们拉起来的（intent 为 null），
+            // 不是用户点开始。这种情况下开一个新会话只会造出一堆空 CSV，
+            // 历史里全是「空文件·没有数据」。直接退出，等用户手动开始。
+            if (design <= 0) {
+                stopSelf();
+                return START_NOT_STICKY;
+            }
             startSampling(design, Math.max(1, secs) * 1000L);
         }
         return START_STICKY;
@@ -99,17 +111,20 @@ public class SamplerService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
         NotificationChannel ch = new NotificationChannel(
-                CHANNEL_ID, "放电采样", NotificationManager.IMPORTANCE_LOW);
-        ch.setDescription("电池容量测量期间保持采样");
+                CHANNEL_ID, "电池采样", NotificationManager.IMPORTANCE_LOW);
+        ch.setDescription("电池容量测量期间保持采样，充放电都记");
         nm.createNotificationChannel(ch);
     }
 
     private void startSampling(double design, long interval) {
         designMah = design;
         intervalMs = interval;
+        intervalS = interval / 1000L;
         t0 = System.currentTimeMillis();
         startedAt = t0;
         sampleCount = 0;
+        dischargePoints = 0;
+        chargePoints = 0;
         lowBatteryNotified = false;
 
         File dir = getExternalFilesDir(null);
@@ -204,6 +219,11 @@ public class SamplerService extends Service {
         lastSoc = soc;
         lastCounterUah = counterUah;
         sampleCount++;
+
+        // 充放电两段都记，分析时再挑能用的那一段。这里只是给界面一个进度感：
+        // 用户看到"充电已记 32 分钟"，就不会误以为 App 只肯测耗电。
+        if ("discharging".equals(status)) dischargePoints++;
+        else if ("charging".equals(status) || "full".equals(status)) chargePoints++;
 
         // 充到满时留一条快照：这是最省事的那种数据，用户什么都不用做
         SnapshotStore.maybeRecord(this, soc, counterUah, tempTenth / 10.0);

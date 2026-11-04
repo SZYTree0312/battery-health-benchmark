@@ -12,7 +12,7 @@
         android:label="@string/app_name"
         android:icon="@drawable/ic_battery"
         android:allowBackup="true"
-        android:theme="@android:style/Theme.Material.Light">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -27,6 +27,11 @@
         <activity
             android:name=".ResultActivity"
             android:label="测量结果"
+            android:exported="false" />
+
+        <activity
+            android:name=".HistoryActivity"
+            android:label="历史记录"
             android:exported="false" />
 
         <service

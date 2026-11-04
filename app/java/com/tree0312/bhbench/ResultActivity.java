@@ -59,6 +59,12 @@ public class ResultActivity extends Activity {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
+    /** 状态栏高度。主题没开 fitsSystemWindows，标题会被状态栏压住。 */
+    private int statusBarH() {
+        int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        return id > 0 ? getResources().getDimensionPixelSize(id) : dp(24);
+    }
+
     // ------------------------------------------------------------ 构建界面
 
     private View buildUi() {
@@ -67,7 +73,7 @@ public class ResultActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(24), dp(20), dp(32));
+        root.setPadding(dp(20), dp(16) + statusBarH(), dp(20), dp(32));
         scroll.addView(root);
 
         // 标题
@@ -157,7 +163,8 @@ public class ResultActivity extends Activity {
                 report.reliable ? "mAh 等效容量" : "mAh 参考值(未采信)", true));
         row.addView(metricCard(
                 String.format(Locale.US, "%.0f", report.designMah), "mAh 标称", true));
-        row.addView(metricCard(durationText(), "放电时长", false));
+        row.addView(metricCard(durationText(),
+                report.isChargeMode() ? "充电时长" : "放电时长", false));
 
         return row;
     }
@@ -312,7 +319,9 @@ public class ResultActivity extends Activity {
 
     private View buildEmpty() {
         TextView tv = new TextView(this);
-        tv.setText("这份记录里没有可用的放电数据。\n\n测试期间是否一直插着充电线？");
+        tv.setText("这份记录里没有能用的数据 —— 可能是刚开始就停了，"
+                + "或者整个过程中库仑计和电流都没读到值。\n\n"
+                + "重新跑一次，至少让它在后台待够十几分钟。");
         tv.setTextSize(14);
         tv.setTextColor(Color.rgb(120, 120, 120));
         tv.setLineSpacing(dp(6), 1f);
