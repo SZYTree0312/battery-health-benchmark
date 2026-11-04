@@ -275,6 +275,18 @@ App 有没有漏掉台阶，叠起来一眼看得出来。
 `android.R.attr.colorAccent` 取 —— MIUI / ColorOS / 原生 Android 各给各的主题色，
 App 跟着 ROM 走，而不是套一层自制皮肤。按钮上的文字按强调色亮度自动选黑或白。
 
+### 启动唤醒动画
+
+0.5.3 起，从桌面点图标先走 `WakeActivity`：电池从 0 一格格充到**此刻的真实电量**
+（`ACTION_BATTERY_CHANGED` sticky 广播读的，不是写死的数），数字跟着跳，充完淡出
+进主界面。全程约 1.26 秒，轻点任意处可跳过。低于 15% 用异常色、15–40% 用提醒色，
+其余用系统强调色。
+
+独立成 LAUNCHER Activity，而不是在 MainActivity 上盖一层遮罩 —— 只有冷启动
+（进程新建、从桌面点图标）才会播；从结果页返回、App 在后台被切回前台，
+系统直接恢复原 task，不会重播。动画对象在 `onDestroy` 里 cancel，不留回调；
+前台采样服务和它互不相干，正在跑的记录不受影响。
+
 ### 自己编译
 
 不需要 Gradle，也不需要 Android Studio。只要有 JDK 17 和 Android SDK
@@ -465,10 +477,12 @@ python -m unittest discover -s tests -v
 
 ## 状态
 
-- **App**：v0.5.2 APK 手工打包通过（70 KB）。v0.4 在 Xiaomi 25113PN0EC 上实测过
+- **App**：v0.5.3 APK 手工打包通过（74 KB）。v0.4 在 Xiaomi 25113PN0EC 上实测过
   放电段 93.7% / 6561 mAh、历史列表、单份导出、勾选删除；
-  v0.5.1 / v0.5.2 已装该机，显示模式三态、深色/浅色原生配色、状态栏跟随、
-  充电器体检页均已跑通。充电器档案的有数据态与结果页曲线图**未在真机点完**
+  v0.5.1 / v0.5.2 已装该机，显示模式三态、深浅原生配色、状态栏跟随、
+  充电器体检页均已跑通。**v0.5.3 发布时设备未连 adb，唤醒动画未真机验证**
+  （已确认 launchable-activity 指向 WakeActivity、新类在 dex 里）。
+  另未点完：充电器档案有数据态、结果页曲线图排版
 - **adb 通道**：同一台机器实测 sysfs 0/8 全封，`dumpsys` 库仑计可用，
   守护进程跨 adb 连接存活，采样抖动 0.3 ms
 - **analyzer**：`python -m unittest discover -s tests -v` 60 项全过，
@@ -497,6 +511,7 @@ python -m unittest discover -s tests -v
 - [x] Modern UI 重设计，强调色跟随各 ROM（v0.5.2）
 - [x] 充电器档案：聚合对比 / 改名 / 删除 / 导出（v0.5.2）
 - [x] 系统电池曲线 vs App 采样曲线对比（v0.5.2，PC 侧）
+- [x] 开 App 唤醒动画（v0.5.3）
 - [ ] 充电器指纹库：用多次实测把「功率区间 → 具体型号」校准成个人库
 - [ ] USB 测试仪联动：把抓到的 PD 报文导入，校正反推结果
 - [x] 充电段采集，用充电积分和放电结果交叉校验
