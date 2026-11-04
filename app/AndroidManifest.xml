@@ -5,6 +5,8 @@
     <!-- 前台服务：放电测试要跑几小时，必须避免被系统或 ROM 回收 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 34 起 dataSync 有 6 小时上限，长测会被强停，改用 specialUse -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 结果页的「去放行」入口：只用来跳系统设置，不申请常驻忽略 -->
@@ -51,7 +53,12 @@
         <service
             android:name=".SamplerService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <!-- specialUse 必须写清用途，否则安装后 startForeground 直接抛异常 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="用户主动启动的电池容量测量，需要数小时连续读取电池状态并写本地 CSV" />
+        </service>
 
     </application>
 </manifest>

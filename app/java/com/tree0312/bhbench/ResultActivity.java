@@ -453,10 +453,22 @@ public class ResultActivity extends Activity {
                     String.format(Locale.US, "中位 %.0f 秒 / P99 %.0f 秒 / 打断 %d 次",
                             chartGaps2.medianS, chartGaps2.p99S, chartGaps2.breaks), false);
         }
+        // 全段积分把空档当成"两端电流的平均值", 天生低估, 只能当参考
         if (report.crossCheckMah >= 0 && !Double.isNaN(report.divergencePct)) {
-            addRow(box, "交叉校验(电流积分)",
+            addRow(box, "全段积分(含空档)",
                     String.format(Locale.US, "%.0f mAh (%+.0f%%)",
                             report.crossCheckMah, report.divergencePct), false);
+        }
+        if (report.audit != null && report.audit.blocks > 0) {
+            Analyzer.Audit a = report.audit;
+            addRow(box, "连续段对账",
+                    String.format(Locale.US, "%d 段 / 共 %.0f 分钟", a.blocks, a.minutes), false);
+            addRow(box, "  积分 vs 库仑计",
+                    String.format(Locale.US, "%.0f / %.0f mAh (%+.0f%%)",
+                            a.integralMah, a.counterMah, a.weightedErrPct), false);
+            addRow(box, "  段间偏差范围",
+                    String.format(Locale.US, "%+.0f%% ~ %+.0f%%",
+                            a.worstErrPct, a.bestErrPct), false);
         }
         addRow(box, "测量结论", report.reliable ? "可采信" : "不采信", true);
 

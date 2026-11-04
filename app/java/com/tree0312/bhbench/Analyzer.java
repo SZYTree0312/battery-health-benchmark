@@ -42,12 +42,39 @@ public class Analyzer {
     /** 库仑计反向变化上限，超了说明中途插拔过充电器。 */
     private static final double COUNTER_WRONG_WAY_LIMIT = 50;
     private static final double DIVERGENCE_WARN_PCT = 10;
+    /** 积分对账：小块没意义（ΔCC 是 1 mAh 整数，5 分钟才够压掉量化噪声）。 */
+    private static final double AUDIT_BLOCK_MIN_S = 300;
+    private static final double AUDIT_BLOCK_MIN_MAH = 50;
     /** 健康度物理合理区间，超出就是数据有问题，绝不能给「良好」。 */
     private static final double SOH_MIN = 30, SOH_MAX = 115;
 
     public static class Row {
         double t, current, voltage, soc, temp, counter;
         String status;
+    }
+
+    /**
+     * 连续段积分对账。
+     *
+     * 目的是把「采样被打断」和「电流读数本身偏」这两件事分开算：
+     * 只在**没有空档**的连续块里比较 ∫I dt 与 ΔCC，块内点数密、时间连续，
+     * 任何偏差都只能来自电流读数，跟采样率无关。
+     *
+     * 不用整段积分来做这件事：整段里只要有空档，空档期间就被当成两端电流的
+     * 平均值，结果被严重拉低，反而掩盖了真正的原因。真机数据上这两个数差得
+     * 很远 —— 全段 −42%，连续块内 −20～−43%…所以别偷懒只看全段。
+     */
+    public static class Audit {
+        /** 参与的连续块数 */
+        public int blocks;
+        /** 这些块合计覆盖多少分钟 */
+        public double minutes;
+        public double counterMah;
+        public double integralMah;
+        /** 按电量加权的相对偏差，负 = 积分比库仑计少 */
+        public double weightedErrPct;
+        public double worstErrPct;
+        public double bestErrPct;
     }
 
     public static class Report {
@@ -85,6 +112,8 @@ public class Analyzer {
          * 结果页拿它画曲线 —— 不重新读一遍文件，也保证画的和算的是同一份数据。
          */
         public List<Row> segment;
+        /** 连续段积分对账，没有可用块时为 null */
+        public Audit audit;
         public final List<String> warnings = new ArrayList<>();
 
         public double sohPct() {
@@ -133,6 +162,7 @@ public class Analyzer {
 
         fillBasics(r, seg);
         r.segment = seg;
+        r.audit = auditIntegration(seg);
         computeNetCharge(r, seg);
         applySocScaling(r);
 
@@ -144,6 +174,66 @@ public class Analyzer {
 
         checkReliability(r);
         return r;
+    }
+
+    // ------------------------------------------------------------ 积分对账
+
+    /**
+     * 按 60 秒阈值把采样切成连续块，在每块内比 ∫I dt 与 |ΔCC|。
+     * 只收时长 ≥5 分钟、ΔCC ≥50 mAh 的块 —— 库仑计分辨率是 1 mAh，
+     * 窗口太短的话量化噪声就有几十个百分点，什么也证明不了。
+     */
+    private static Audit auditIntegration(List<Row> seg) {
+        Audit a = new Audit();
+        if (seg == null || seg.size() < 3) return a;
+
+        List<List<Row>> blocks = new ArrayList<>();
+        List<Row> cur = new ArrayList<>();
+        cur.add(seg.get(0));
+        for (int i = 1; i < seg.size(); i++) {
+            Row prev = seg.get(i - 1), now = seg.get(i);
+            if (now.t - prev.t > MAX_GAP_S) {
+                blocks.add(cur);
+                cur = new ArrayList<>();
+            }
+            cur.add(now);
+        }
+        blocks.add(cur);
+
+        double sumC = 0, sumQ = 0, minutes = 0;
+        double worst = 0, best = 0;
+        for (List<Row> b : blocks) {
+            double dur = b.get(b.size() - 1).t - b.get(0).t;
+            if (dur < AUDIT_BLOCK_MIN_S) continue;
+
+            double q = 0;
+            for (int i = 1; i < b.size(); i++) {
+                double dt = b.get(i).t - b.get(i - 1).t;
+                if (dt > 0) {
+                    q += (b.get(i).current + b.get(i - 1).current) / 2000.0 * dt / 3.6;
+                }
+            }
+            q = Math.abs(q);
+            double dcc = Math.abs(b.get(b.size() - 1).counter - b.get(0).counter);
+            if (dcc < AUDIT_BLOCK_MIN_MAH || q < 1) continue;
+
+            double err = (q - dcc) / dcc * 100.0;
+            a.blocks++;
+            sumC += dcc;
+            sumQ += q;
+            minutes += dur / 60.0;
+            if (a.blocks == 1 || err < worst) worst = err;
+            if (a.blocks == 1 || err > best) best = err;
+        }
+
+        if (a.blocks == 0) return a;
+        a.counterMah = sumC;
+        a.integralMah = sumQ;
+        a.minutes = minutes;
+        a.weightedErrPct = (sumQ - sumC) / sumC * 100.0;
+        a.worstErrPct = worst;
+        a.bestErrPct = best;
+        return a;
     }
 
     // ------------------------------------------------------------ 净电荷
@@ -240,6 +330,22 @@ public class Analyzer {
 
     private static void checkReliability(Report r) {
         boolean chargeMode = r.isChargeMode();
+
+        // 对账结论：连续块内都差这么多，就不是采样密不密的问题
+        if (r.counterUsed && r.audit != null && r.audit.blocks > 0) {
+            double e = r.audit.weightedErrPct;
+            if (Math.abs(e) >= 5) {
+                r.warnings.add(String.format(Locale.US,
+                        "连续段对账：采样没断的 %d 段（共 %.0f 分钟）里，电流积分仍比库仑计%s %.0f%%。"
+                                + "这不是采样稀疏造成的 —— 是 CURRENT_NOW 读数本身偏，加密采样也治不了",
+                        r.audit.blocks, r.audit.minutes,
+                        e < 0 ? "少" : "多", Math.abs(e)));
+            } else {
+                r.warnings.add(String.format(Locale.US,
+                        "连续段对账：%d 段（共 %.0f 分钟）内电流积分与库仑计只差 %+.0f%%，两条路互证",
+                        r.audit.blocks, r.audit.minutes, e));
+            }
+        }
         double minSeconds = chargeMode ? MIN_CHARGE_S : MIN_DISCHARGE_S;
 
         if (r.durationS < minSeconds) {

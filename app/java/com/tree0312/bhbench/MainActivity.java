@@ -8,11 +8,14 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -32,7 +35,7 @@ import java.util.Locale;
  * 主界面 —— v0.5.3 重排信息架构。
  *
  * 改之前：一屏从上到下堆「电池容量测量」的实时数据、标称容量、六个按钮
- * （开始/停止/分析/历史/充电器体检/充电器档案/显示模式）、最近结果、设备信息。
+ * （开始/停止/分析/历史/充电器体检/充电器档案/显示模式）、设备信息。
  * 功能都在，但两件事被揉成一串按钮，用户得在心里先分类才知道点哪个。
  *
  * 改之后：
@@ -49,7 +52,6 @@ public class MainActivity extends Activity {
     /** 实时数据用固定行复用，每秒只改数值，不重建 View。 */
     private TextView[] liveValues;
     private TextView liveExtra;
-    private TextView tvResult;
     private EditText etDesign;
     private Button btnStart;
     private Button btnStop;
@@ -284,16 +286,8 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(this, HistoryActivity.class)));
         root.addView(Ui.buttonRow(this, S2, btnAnalyze, btnHistory));
 
-        // ---- 最近一次结果
-        root.addView(Ui.section(this, pal, "最近一次结果"));
-        LinearLayout resultCard = Ui.card(this, pal);
-        tvResult = new TextView(this);
-        tvResult.setTextSize(13);
-        tvResult.setTextColor(pal.textPrimary);
-        tvResult.setLineSpacing(dp(5), 1f);
-        resultCard.addView(tvResult);
-        root.addView(resultCard);
-
+        // 「最近一次结果」这张卡撤了：分析按钮直接进结果页，那一屏就是完整结论，
+        // 主界面再复述一遍纯属占地方。要看历史去「测量记录」。
         return root;
     }
 
@@ -363,7 +357,12 @@ public class MainActivity extends Activity {
                  .append("   充电 ")
                  .append(dur(Math.round(SamplerService.chargeSeconds)))
                  .append("\n采样间隔  ").append(SamplerService.currentIntervalS).append(" 秒")
-                 .append(SamplerService.currentIntervalS > 5 ? "（电量没动，自动放宽）" : "");
+                 .append(SamplerService.currentIntervalS > 5 ? "（电量没动，自动放宽）" : "")
+                 .append("\n防冻结  ")
+                 .append(SamplerService.wakeHeld ? "唤醒锁已持" : "唤醒锁没拿到")
+                 .append(SamplerService.freezeCount > 0
+                         ? "   被系统冻过 " + SamplerService.freezeCount + " 次"
+                         : "   没被打断过");
         } else if (SamplerService.currentFile != null) {
             extra.append("上次记录：").append(new File(SamplerService.currentFile).getName());
         }
@@ -421,6 +420,26 @@ public class MainActivity extends Activity {
                 : "已开始记录放电段。到 15% 左右再插充电器");
     }
 
+    /**
+     * 只跳一次系统确认框，把本应用从电池优化名单里摘出去。
+     *
+     * 这条比前台服务更关键：Doze 判定应用"闲置"后可以直接冻结进程，
+     * 前台服务和唤醒锁在国产 ROM 的额外策略下都可能被绕过，唯独
+     * "不优化"白名单是系统层面承认的。用户不点也不影响测量，
+     * 只是更容易被冻 —— 所以界面会显示被冻次数，让他自己判断。
+     */
+    private void requestBatteryExemption() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception ignored) {
+            // 有的 ROM 砍掉了这个入口，静默跳过
+        }
+    }
+
     /** 当前是否插着充电器（充电中或已充满）。 */
     private boolean isPlugged() {
         Intent b = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
@@ -452,7 +471,7 @@ public class MainActivity extends Activity {
         File sessions = new File(dir, "sessions");
         File[] files = sessions.listFiles((d, name) -> name.endsWith(".csv"));
         if (files == null || files.length == 0) {
-            tvResult.setText("还没有记录文件。先跑一次测试。");
+            toast("还没有记录文件，先跑一次测试");
             return;
         }
         Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
@@ -460,7 +479,7 @@ public class MainActivity extends Activity {
 
         int design = prefs.getInt("design", 0);
         if (design <= 0) {
-            tvResult.setText("请先填写厂商标称容量。");
+            toast("先填厂商标称容量");
             return;
         }
 

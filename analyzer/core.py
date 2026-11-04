@@ -126,6 +126,16 @@ class Result:
     reliable: bool = True         # 这份数据够不够格下健康度结论
     cross_check_mah: Optional[float] = None   # 另一条算法算出的容量（交叉校验）
     divergence_pct: Optional[float] = None    # 两条算法的偏差 %
+    # ---- 连续段积分对账 ----
+    # 只在"没有空档"的连续块里比 ∫I dt 与 ΔCC，把"采样被打断"和"电流读数本身偏"
+    # 两件事分开。全段积分做不到这一点：空档会被当成两端电流的平均值。
+    audit_blocks: int = 0
+    audit_minutes: float = 0.0
+    audit_integral_mah: float = 0.0
+    audit_counter_mah: float = 0.0
+    audit_err_pct: Optional[float] = None
+    audit_worst_pct: Optional[float] = None
+    audit_best_pct: Optional[float] = None
     # 本次结论实际用到的那一段采样点。曲线图直接用，保证画的和算的是同一份数据。
     segment: Sequence[Sample] = field(default_factory=list)
 
@@ -331,6 +341,62 @@ def gap_stats(seg: Sequence[Sample]) -> tuple[float, float, int]:
     return max_gap, (100.0 * covered / total if total > 0 else 100.0), long_gaps
 
 
+AUDIT_BLOCK_MIN_S = 300.0      # 5 分钟：ΔCC 是 1 mAh 整数，窗口太短证明不了什么
+AUDIT_BLOCK_MIN_MAH = 50.0
+
+
+def audit_integration(seg: Sequence[Sample]) -> dict:
+    """连续段积分对账：把采样按 MAX_INTEGRATION_GAP_S 切块，在每块内比 ∫I dt 与 |ΔCC|。
+
+    与 integrate() 的区别——integrate 求全长，空档按两端电流插值，结果被拉低；
+    这里只统计没有空档的块，所以偏差只能来自电流读数本身，跟采样率无关。
+
+    返回 dict，块数为 0 时各值为 None（这块数据没法对账）。
+    """
+    out = dict(blocks=0, minutes=0.0, integral_mah=0.0, counter_mah=0.0,
+               err_pct=None, worst_pct=None, best_pct=None)
+    if len(seg) < 3:
+        return out
+
+    blocks: list[list[Sample]] = [[seg[0]]]
+    for prev, now in zip(seg, seg[1:]):
+        if now.t - prev.t > MAX_INTEGRATION_GAP_S:
+            blocks.append([])
+        blocks[-1].append(now)
+
+    sum_q = sum_c = minutes = 0.0
+    errs: list[tuple[float, float]] = []      # (ΔCC, 误差%) 用于加权
+    for b in blocks:
+        if len(b) < 2:
+            continue
+        dur = b[-1].t - b[0].t
+        if dur < AUDIT_BLOCK_MIN_S:
+            continue
+        q = 0.0
+        for a, c in zip(b, b[1:]):
+            dt = c.t - a.t
+            if dt > 0:
+                q += (a.current_ma + c.current_ma) / 2000.0 * dt / 3.6
+        q = abs(q)
+        dcc = abs(b[-1].counter_mah - b[0].counter_mah)
+        if dcc < AUDIT_BLOCK_MIN_MAH or q < 1:
+            continue
+        errs.append((dcc, (q - dcc) / dcc * 100.0))
+        sum_q += q
+        sum_c += dcc
+        minutes += dur / 60.0
+
+    if not errs:
+        return out
+    out.update(
+        blocks=len(errs), minutes=minutes, integral_mah=sum_q, counter_mah=sum_c,
+        err_pct=(sum_q - sum_c) / sum_c * 100.0 if sum_c > 0 else None,
+        worst_pct=min(e for _, e in errs),
+        best_pct=max(e for _, e in errs),
+    )
+    return out
+
+
 def integrate_with_soc_fallback(seg: Sequence[Sample], design_mah: float,
                                 charge: bool) -> tuple[float, float]:
     """没有库仑计时的保守积分：长空档改用 SOC 变化估算，不外推瞬时电流。
@@ -491,6 +557,7 @@ def analyze(samples: Sequence[Sample], design_mah: float,
     fallback_q, fallback_e = integrate_with_soc_fallback(seg, design_mah, is_charge)
     ideal_q, ideal_e = integrate(seg)   # 原始梯形积分，仅作交叉校验
     ideal_abs = abs(ideal_q)
+    audit = audit_integration(seg)
 
     if counter_ok:
         raw_charge, e_wh = net, net / 1000.0 * _time_weighted_voltage(seg)
@@ -521,6 +588,23 @@ def analyze(samples: Sequence[Sample], design_mah: float,
             warnings.append(
                 f"采样被打断 {long_gaps} 次，最长空档 {max_gap / 3600:.1f} 小时，"
                 "梯形积分把唤醒瞬间的高电流当成了整段平均值，会严重高估容量"
+            )
+
+    # ---- 2.5 连续段对账：把"采样稀疏"和"读数本身偏"分开 ----
+    if counter_ok and audit["blocks"] > 0 and audit["err_pct"] is not None:
+        a_err = audit["err_pct"]
+        if abs(a_err) >= 5:
+            warnings.append(
+                f"连续段对账：采样没断的 {audit['blocks']} 段"
+                f"（共 {audit['minutes']:.0f} 分钟）里，电流积分仍比库仑计"
+                f"{'少' if a_err < 0 else '多'} {abs(a_err):.0f}%。"
+                "这不是采样稀疏造成的 —— 是 CURRENT_NOW 读数本身偏，加密采样也治不了"
+            )
+        else:
+            warnings.append(
+                f"连续段对账：{audit['blocks']} 段"
+                f"（共 {audit['minutes']:.0f} 分钟）内电流积分与库仑计只差 "
+                f"{a_err:+.0f}%，两条路互证"
             )
 
     # ---- 3. 采样质量判据 ----
@@ -601,5 +685,12 @@ def analyze(samples: Sequence[Sample], design_mah: float,
         reliable=reliable,
         cross_check_mah=cross_check,
         divergence_pct=divergence,
+        audit_blocks=audit["blocks"],
+        audit_minutes=audit["minutes"],
+        audit_integral_mah=audit["integral_mah"],
+        audit_counter_mah=audit["counter_mah"],
+        audit_err_pct=audit["err_pct"],
+        audit_worst_pct=audit["worst_pct"],
+        audit_best_pct=audit["best_pct"],
         segment=list(seg),
     )
