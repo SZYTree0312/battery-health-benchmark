@@ -4,13 +4,10 @@ import static com.tree0312.bhbench.Ui.*;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
-import android.graphics.Typeface;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -21,6 +18,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -31,11 +29,20 @@ import java.util.Comparator;
 import java.util.Locale;
 
 /**
- * 主界面。
+ * 主界面 —— v0.5.3 重排信息架构。
  *
- * 不引 AndroidX、不写 XML 布局，全部代码构建 —— 目的只有一个：
- * 能用手工 aapt2 + javac + d8 打包出 APK，不依赖 Gradle 和一堆 Maven 依赖。
- * 界面朴素但够用，重点是把测量流程走通。
+ * 改之前：一屏从上到下堆「电池容量测量」的实时数据、标称容量、六个按钮
+ * （开始/停止/分析/历史/充电器体检/充电器档案/显示模式）、最近结果、设备信息。
+ * 功能都在，但两件事被揉成一串按钮，用户得在心里先分类才知道点哪个。
+ *
+ * 改之后：
+ *   1. 页面顶部一个分段控件，把**测电池容量**和**测充电器**并成同一页的两段 ——
+ *      本来就是同一台手机的两项体检，切一下就到，不用跳页面；
+ *   2. 显示模式、版本信息、设备信息这些「一整个月都不碰一次」的东西
+ *      收进右上角设置（SettingsActivity）；
+ *   3. 最近结果留在电池段，充电器档案入口留在充电器段，各归各位。
+ *
+ * 全部代码构建 View，不引 AndroidX —— 手工 aapt2 + javac + d8 的打包方式不变。
  */
 public class MainActivity extends Activity {
 
@@ -43,17 +50,22 @@ public class MainActivity extends Activity {
     private TextView[] liveValues;
     private TextView liveExtra;
     private TextView tvResult;
-    private TextView tvDevice;
     private EditText etDesign;
     private Button btnStart;
     private Button btnStop;
-    private Button btnAnalyze;
 
     private BatteryManager bm;
     private SharedPreferences prefs;
     /** 配色跟随系统深浅色。 */
     private Palette pal;
     private final Handler ui = new Handler(Looper.getMainLooper());
+
+    private ChargerPanel chargerPanel;
+    private ScrollView batteryScroll;
+    private ScrollView chargerScroll;
+    private Ui.Segmented segmented;
+
+    private static final String KEY_TAB = "home_tab";
 
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
@@ -72,17 +84,34 @@ public class MainActivity extends Activity {
         setContentView(buildUi());
         Ui.applySystemBars(this, pal);
         askNotificationPermission();
+        ui.removeCallbacks(refresh);
         ui.post(refresh);
     }
 
     @Override protected void onResume() {
         super.onResume();
+        // 先撤再投：onCreate 已经投过一次，直接 post 会一秒跑两遍
+        ui.removeCallbacks(refresh);
         ui.post(refresh);
+        if (currentTab() == 1 && chargerPanel != null) chargerPanel.onShown();
     }
 
     @Override protected void onPause() {
         ui.removeCallbacks(refresh);
+        // 充电器采样靠 UI 线程的定时器推进，退到后台必须停
+        if (chargerPanel != null) chargerPanel.onHostPause();
         super.onPause();
+    }
+
+    @Override protected void onDestroy() {
+        if (chargerPanel != null) chargerPanel.onHostDestroy();
+        super.onDestroy();
+    }
+
+    /** 充电器档案导出走系统文件选择器，回执转给面板处理。 */
+    @Override protected void onActivityResult(int req, int result, Intent data) {
+        super.onActivityResult(req, result, data);
+        if (chargerPanel != null) chargerPanel.onActivityResult(req, result, data);
     }
 
     private void askNotificationPermission() {
@@ -105,30 +134,88 @@ public class MainActivity extends Activity {
         return id > 0 ? getResources().getDimensionPixelSize(id) : dp(24);
     }
 
-    private View buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(pal.bg);
-        scroll.setClipToPadding(false);
+    private int currentTab() {
+        int t = prefs.getInt(KEY_TAB, 0);
+        return (t == 1) ? 1 : 0;
+    }
 
+    private View buildUi() {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(pal.bg);
+
+        // ---- 固定的页头：标题 + 设置 + 分段。不随内容滚动，切段时位置不变
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(20), dp(14) + statusBarH(), dp(20), dp(S3));
+        page.addView(header);
+
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(titleRow);
+
+        TextView title = Ui.title(this, pal, "电池体检");
+        titleRow.addView(title, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        FrameLayout gearBtn = new FrameLayout(this);
+        gearBtn.setBackground(Ui.roundRipple(this, pal, pal.accentSoft, Ui.CHIP_RADIUS_DP));
+        gearBtn.setContentDescription("设置");
+        gearBtn.setOnClickListener(v ->
+                startActivity(new Intent(this, SettingsActivity.class)));
+        gearBtn.addView(new GearIcon(this, pal.accent),
+                new FrameLayout.LayoutParams(dp(23), dp(23), Gravity.CENTER));
+        titleRow.addView(gearBtn, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        TextView sub = Ui.subtitle(this, pal,
+                "容量看电池还能装多少，体检看充电器能给多少 —— 都是这台手机的实测。");
+        header.addView(sub);
+
+        int tab = currentTab();
+        segmented = Ui.segmented(this, pal,
+                new String[]{"电池容量", "充电器体检"}, tab, this::showTab);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(S4);
+        header.addView(segmented.view, slp);
+
+        // ---- 内容区：两个面板叠在一起，切换靠 visibility
+        FrameLayout content = new FrameLayout(this);
+        page.addView(content, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        // 内边距放在 ScrollView 身上，不放在里面的 LinearLayout 上。
+        // 放里面时子 View 的测量宽度是「屏幕宽」，文字会贴着甚至压过右边缘
+        // （实测右侧只剩 12dp，和左边 20dp 不对称）；放 ScrollView 上，
+        // 它给子 View 的可用宽度就已经扣掉了两边，文字换行一定落在等距区域内。
+        batteryScroll = new ScrollView(this);
+        batteryScroll.setClipToPadding(false);
+        batteryScroll.setPadding(dp(20), 0, dp(20), 0);
+        batteryScroll.addView(buildBatteryPanel());
+        content.addView(batteryScroll, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+
+        chargerScroll = new ScrollView(this);
+        chargerScroll.setClipToPadding(false);
+        chargerScroll.setPadding(dp(20), 0, dp(20), 0);
+        chargerPanel = new ChargerPanel(this, pal);
+        chargerScroll.addView(chargerPanel.build());
+        content.addView(chargerScroll, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+
+        applyTab(tab);
+        return page;
+    }
+
+    /** 电池容量段。 */
+    private View buildBatteryPanel() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(16) + statusBarH(), dp(20), dp(S6));
-        scroll.addView(root);
-
-        root.addView(Ui.title(this, pal, "电池容量测量"));
-        TextView sub = Ui.subtitle(this, pal,
-                "连续记录，充电、放电都记，中途不用停。");
-        sub.setTextColor(pal.textSecondary);
-        root.addView(sub);
-
-        TextView how = new TextView(this);
-        how.setText("满电拔线用下去，到 15% 会提醒插电；插着充电器就一直充到 100%。\n"
-                + "分析时优先用完整放电段，不完整自动退回充电段。");
-        how.setTextSize(12);
-        how.setTextColor(pal.textTertiary);
-        how.setLineSpacing(dp(3), 1f);
-        how.setPadding(0, dp(S3), 0, 0);
-        root.addView(how);
+        root.setPadding(0, dp(S2), 0, dp(S6));
 
         // ---- 实时数据
         root.addView(Ui.section(this, pal, "实时数据"));
@@ -149,8 +236,8 @@ public class MainActivity extends Activity {
         live.addView(liveExtra);
         root.addView(live);
 
-        // ---- 设置
-        root.addView(Ui.section(this, pal, "测量设置"));
+        // ---- 标称容量：测量的唯一输入项，紧贴操作区
+        root.addView(Ui.section(this, pal, "标称容量"));
         LinearLayout setting = Ui.card(this, pal);
         TextView lblDesign = new TextView(this);
         lblDesign.setText("厂商标称容量（mAh）");
@@ -167,8 +254,17 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        ep.topMargin = dp(S2);
+        ep.topMargin = dp(S1);
         setting.addView(etDesign, ep);
+
+        TextView designHint = new TextView(this);
+        designHint.setText("满电拔线用下去，到 15% 会提醒插电；插着充电器就一直充到 100%。"
+                + "分析时优先用完整放电段，不完整自动退回充电段。");
+        designHint.setTextSize(11);
+        designHint.setTextColor(pal.textTertiary);
+        designHint.setLineSpacing(dp(3), 1f);
+        designHint.setPadding(0, dp(S3), 0, 0);
+        setting.addView(designHint);
         root.addView(setting);
 
         // ---- 操作：一个主按钮，其余都是次按钮，主次一眼可分
@@ -181,40 +277,12 @@ public class MainActivity extends Activity {
         btnStop.setOnClickListener(v -> stopSampling());
         root.addView(Ui.buttonRow(this, S2, btnStart, btnStop));
 
-        btnAnalyze = Ui.secondary(this, pal, "分析最新");
+        Button btnAnalyze = Ui.secondary(this, pal, "分析最新");
         btnAnalyze.setOnClickListener(v -> analyzeLatest());
         Button btnHistory = Ui.secondary(this, pal, "历史记录");
         btnHistory.setOnClickListener(v ->
                 startActivity(new Intent(this, HistoryActivity.class)));
         root.addView(Ui.buttonRow(this, S2, btnAnalyze, btnHistory));
-
-        Button btnCharger = Ui.secondary(this, pal, "充电器体检");
-        btnCharger.setOnClickListener(v ->
-                startActivity(new Intent(this, ChargerProbeActivity.class)));
-        LinearLayout.LayoutParams lp3 = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp3.topMargin = dp(S2);
-        root.addView(btnCharger, lp3);
-
-        Button btnChargerHistory = Ui.secondary(this, pal, "充电器档案");
-        btnChargerHistory.setOnClickListener(v ->
-                startActivity(new Intent(this, ChargerHistoryActivity.class)));
-        LinearLayout.LayoutParams lph = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        lph.topMargin = dp(S2);
-        root.addView(btnChargerHistory, lph);
-
-        Button btnTheme = Ui.secondary(this, pal,
-                "显示模式 · " + ThemeMode.label(ThemeMode.get(this)));
-        btnTheme.setMinHeight(dp(44));
-        btnTheme.setOnClickListener(v -> showThemeDialog());
-        LinearLayout.LayoutParams lp4 = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp4.topMargin = dp(S2);
-        root.addView(btnTheme, lp4);
 
         // ---- 最近一次结果
         root.addView(Ui.section(this, pal, "最近一次结果"));
@@ -226,40 +294,22 @@ public class MainActivity extends Activity {
         resultCard.addView(tvResult);
         root.addView(resultCard);
 
-        tvDevice = new TextView(this);
-        tvDevice.setTextSize(11);
-        tvDevice.setTextColor(pal.textTertiary);
-        tvDevice.setPadding(0, dp(S5), 0, 0);
-        tvDevice.setText(Build.MANUFACTURER + " " + Build.MODEL
-                + "   Android " + Build.VERSION.RELEASE
-                + " (API " + Build.VERSION.SDK_INT + ")");
-        root.addView(tvDevice);
-
-        return scroll;
+        return root;
     }
 
-    /**
-     * 三态切换。选完清空整个 task 栈重开主界面 —— 光 recreate() 的话，
-     * 后退栈里已经建好的结果页/历史页还留着旧主题，按返回键就会看到半套配色。
-     * 前台采样服务不受 Activity 栈影响，不会被打断。
-     */
-    private void showThemeDialog() {
-        final String[] labels = {"跟随系统", "浅色", "深色"};
-        final int[] modes = {ThemeMode.SYSTEM, ThemeMode.LIGHT, ThemeMode.DARK};
-        int cur = ThemeMode.get(this);
-        int checked = cur == ThemeMode.LIGHT ? 1 : (cur == ThemeMode.DARK ? 2 : 0);
+    private void showTab(int index) {
+        prefs.edit().putInt(KEY_TAB, index).apply();
+        applyTab(index);
+    }
 
-        new AlertDialog.Builder(this)
-                .setTitle("显示模式")
-                .setSingleChoiceItems(labels, checked, (d, which) -> {
-                    ThemeMode.set(this, modes[which]);
-                    d.dismiss();
-                    Intent i = new Intent(this, MainActivity.class);
-                    i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(i);
-                })
-                .setNegativeButton("取消", null)
-                .show();
+    private void applyTab(int index) {
+        batteryScroll.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
+        chargerScroll.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
+        if (chargerPanel != null) {
+            if (index == 1) chargerPanel.onShown();
+            else chargerPanel.onHidden();
+        }
+        if (segmented != null) segmented.setSelected(index);
     }
 
     // ------------------------------------------------------------ 状态

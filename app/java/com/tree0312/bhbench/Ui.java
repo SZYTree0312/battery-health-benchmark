@@ -57,6 +57,12 @@ public final class Ui {
         return g;
     }
 
+    /** 带涟漪的圆角色块，给自绘图标按钮用。 */
+    public static Drawable roundRipple(Context c, Palette p, int color, float radiusDp) {
+        return new RippleDrawable(ColorStateList.valueOf(p.ripple),
+                rounded(c, color, radiusDp), rounded(c, Color.WHITE, radiusDp));
+    }
+
     /** 带涟漪、带禁用态的圆角按钮背景。 */
     private static Drawable buttonBg(Context c, Palette p, boolean primary) {
         float r = BUTTON_RADIUS_DP;
@@ -201,6 +207,120 @@ public final class Ui {
         line.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(c, 1) / 2)));
         return line;
+    }
+
+    /** 可点的设置式行：左标签、右数值、尾随箭头。 */
+    public static class NavRow {
+        public final LinearLayout view;
+        public final TextView value;
+
+        NavRow(LinearLayout v, TextView value) {
+            this.view = v;
+            this.value = value;
+        }
+    }
+
+    public static NavRow navRow(Context c, Palette p, String label, String value) {
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(c, S3), 0, dp(c, S3));
+
+        TextView l = new TextView(c);
+        l.setText(label);
+        l.setTextSize(14);
+        l.setTextColor(p.textPrimary);
+        row.addView(l, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView v = new TextView(c);
+        v.setText(value);
+        v.setTextSize(13);
+        v.setTextColor(p.textSecondary);
+        v.setGravity(Gravity.END);
+        row.addView(v);
+
+        TextView arrow = new TextView(c);
+        arrow.setText("›");
+        arrow.setTextSize(18);
+        arrow.setTextColor(p.textTertiary);
+        arrow.setPadding(dp(c, S2), 0, 0, 0);
+        row.addView(arrow);
+        return new NavRow(row, v);
+    }
+
+    /** 分段控件：两项或三项，选中项浮起一层底色。用于页面内的功能切换。 */
+    public interface OnSegment {
+        void onSegment(int index);
+    }
+
+    public static final class Segmented {
+        public final LinearLayout view;
+        private final TextView[] items;
+        private final Palette p;
+        private final Context ctx;
+        private int selected;
+
+        Segmented(Context c, Palette p, LinearLayout v, TextView[] items, int sel) {
+            this.ctx = c;
+            this.p = p;
+            this.view = v;
+            this.items = items;
+            this.selected = sel;
+        }
+
+        public int selected() {
+            return selected;
+        }
+
+        /** 只改外观，不触发回调 —— 宿主自己控制流程时用。 */
+        public void setSelected(int index) {
+            if (index < 0 || index >= items.length) return;
+            selected = index;
+            for (int i = 0; i < items.length; i++) {
+                boolean on = i == index;
+                items[i].setBackground(on
+                        ? rounded(ctx, p.surface, 10f) : null);
+                items[i].setTextColor(on ? p.accent : p.textSecondary);
+                items[i].setTypeface(Typeface.DEFAULT_BOLD);
+            }
+        }
+    }
+
+    public static Segmented segmented(Context c, Palette p, String[] labels,
+                                      int selected, OnSegment cb) {
+        LinearLayout box = new LinearLayout(c);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+        int pad = dp(c, S1) / 2 + dp(c, 2);
+        box.setPadding(pad, pad, pad, pad);
+        box.setBackground(rounded(c, p.buttonSecondary, 12f));
+
+        TextView[] items = new TextView[labels.length];
+        int h = dp(c, 38);
+        for (int i = 0; i < labels.length; i++) {
+            TextView t = new TextView(c);
+            t.setText(labels[i]);
+            t.setTextSize(13);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setGravity(Gravity.CENTER);
+            t.setSingleLine(true);
+            LinearLayout.LayoutParams lp =
+                    new LinearLayout.LayoutParams(0, h, 1f);
+            box.addView(t, lp);
+            items[i] = t;
+        }
+
+        Segmented seg = new Segmented(c, p, box, items, selected);
+        seg.setSelected(selected);
+        for (int i = 0; i < items.length; i++) {
+            final int idx = i;
+            items[i].setOnClickListener(v -> {
+                if (seg.selected == idx) return;
+                seg.setSelected(idx);
+                if (cb != null) cb.onSegment(idx);
+            });
+        }
+        return seg;
     }
 
     /** 一行里等分的两个/三个按钮。 */

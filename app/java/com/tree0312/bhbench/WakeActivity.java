@@ -70,13 +70,20 @@ public class WakeActivity extends Activity {
         root.setBackgroundColor(pal.bg);
         root.setOnClickListener(v -> go());
 
+        // 关键：竖排 LinearLayout 的默认 LayoutParams 宽度是 MATCH_PARENT，不是
+        // WRAP_CONTENT。v0.5.3 初版就是踩了这个坑 —— 电池（显式 WRAP_CONTENT）
+        // 居中，而下面几行文字各占满一行并左对齐，看起来像「整体被推到左上角、
+        // 左边还被切掉半截」。这里每个子 View 都显式给 WRAP_CONTENT，
+        // 外层 content 本身也用 WRAP_CONTENT + 居中，位置就由布局算，不靠猜。
         content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setGravity(Gravity.CENTER_HORIZONTAL);
+        // 文字统一左对齐，起点对齐电池图形的左边缘 —— 整块居中，块内左对齐。
+        // 视觉上既有左边距（不会贴屏幕边），读起来也是齐的一条线。
+        content.setGravity(Gravity.START);
         content.setAlpha(0f);
         FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT);
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
         clp.gravity = Gravity.CENTER;
         root.addView(content, clp);
 
@@ -84,30 +91,34 @@ public class WakeActivity extends Activity {
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        blp.bottomMargin = dp(24);
+        blp.bottomMargin = dp(28);
         content.addView(battery, blp);
 
         pct = new TextView(this);
         pct.setText("0 %");
-        pct.setTextSize(34);
+        pct.setTextSize(40);
         pct.setTypeface(Typeface.DEFAULT_BOLD);
         pct.setTextColor(pal.textPrimary);
-        content.addView(pct);
+        pct.setGravity(Gravity.START);
+        content.addView(pct, wrap());
 
         brand = new TextView(this);
-        brand.setText("电池容量测量");
-        brand.setTextSize(15);
+        // 跟着字符串资源走，改了 app_name 这里不会留着旧名字
+        brand.setText(R.string.app_name);
+        brand.setTextSize(16);
         brand.setTypeface(Typeface.DEFAULT_BOLD);
         brand.setTextColor(pal.textSecondary);
-        brand.setPadding(0, dp(18), 0, 0);
-        content.addView(brand);
+        brand.setGravity(Gravity.START);
+        brand.setPadding(0, dp(20), 0, 0);
+        content.addView(brand, wrap());
 
         tip = new TextView(this);
         tip.setText("正在读取电池状态…");
         tip.setTextSize(12);
         tip.setTextColor(pal.textTertiary);
-        tip.setPadding(0, dp(6), 0, 0);
-        content.addView(tip);
+        tip.setGravity(Gravity.START);
+        tip.setPadding(0, dp(8), 0, 0);
+        content.addView(tip, wrap());
 
         TextView skip = new TextView(this);
         skip.setText("轻点任意处跳过");
@@ -121,6 +132,13 @@ public class WakeActivity extends Activity {
         root.addView(skip, slp);
 
         return root;
+    }
+
+    /** 竖排 LinearLayout 的默认宽度是 MATCH_PARENT，文字行必须显式包住自己。 */
+    private static LinearLayout.LayoutParams wrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
     }
 
     /** 和主界面同源：BatteryManager 的 sticky 广播，不额外申请权限。 */

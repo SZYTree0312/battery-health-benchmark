@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">电池容量测量</string>
+    <!-- v0.5.3 起 App 同时做「电池容量」和「充电器体检」两件事，
+         原名「电池容量测量」只覆盖一半，桌面图标下改叫「电池体检」。 -->
+    <string name="app_name">电池体检</string>
 </resources>
