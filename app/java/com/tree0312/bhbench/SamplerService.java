@@ -10,12 +10,9 @@ import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.os.BatteryManager;
 import android.os.Build;
-import android.app.AlarmManager;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.IBinder;
-import android.os.PowerManager;
-import android.os.SystemClock;
+import android.os.Looper;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -34,33 +31,11 @@ import java.util.Locale;
  *
  * 数据源只用 BatteryManager 和电池广播，全部是公开 API，不需要 root、
  * 不需要 adb、不需要电脑。这一点是整个方案能成立的前提。
- *
- * ---- v0.5.3-rc2：从"降低被冻结概率"改成"尽量不让它冻结"
- *
- * 之前只有前台服务 + 主线程 Handler，实测放电一晚能被系统按 Doze 掐掉几百次，
- * 5 秒采样被拉成几小时一个点，电流积分因此彻底失去意义。四层防护：
- *   1. PARTIAL_WAKE_LOCK —— 采样期间 CPU 不进 suspend，Handler 才能准点跑。
- *      这是唯一真正管用的一层，其余都是辅助。
- *   2. HandlerThread —— 采样不跟主线程抢；界面卡一下不会把采样推迟。
- *   3. AlarmManager.setAndAllowWhileIdle 看门狗 —— 万一进程被冻住，每 9 分钟
- *      把进程唤醒一次，把积压的 Handler 任务放出来，把空档压短。
- *   4. 前台服务类型改 specialUse —— Android 14+ 的 dataSync 类型有 6 小时上限，
- *      放电测试经常跑 8 小时以上，会被系统直接强停。
- *
- * 仍然管不了的一层：国产 ROM 的"省电策略"可以在更上层把进程冻结。这只能靠用户
- * 在系统设置里给本应用"无限制"，App 自己无权修改。所以界面会显示"被冻结次数"，
- * 让用户看到到底有没有被掐。
- *
- * 另一个修正：计时基准从 System.currentTimeMillis() 换成 elapsedRealtime()。
- * 前者会被 NTP 校时拖动，半夜跳一次几秒，dt 就变负（老代码里那个 dt<0 的补丁
- * 就是踩了这个坑）；后者是开机以来的单调时钟，跨校时不变。
  */
 public class SamplerService extends Service {
 
     public static final String ACTION_START = "com.tree0312.bhbench.START";
     public static final String ACTION_STOP  = "com.tree0312.bhbench.STOP";
-    /** 由 AlarmManager 定时打进来的看门狗，只用来把被冻结的进程叫醒。 */
-    public static final String ACTION_WATCHDOG = "com.tree0312.bhbench.WATCHDOG";
     public static final String EXTRA_DESIGN = "design_mah";
     public static final String EXTRA_INTERVAL = "interval_s";
 
@@ -70,11 +45,6 @@ public class SamplerService extends Service {
     private static final long MAX_INTERVAL_MS = 30_000L;
     /** 充电时本来就很慢，起步就比放电疏一点。 */
     private static final long CHARGE_INTERVAL_MS = 15_000L;
-
-    /** Doze 允许每个应用每 9 分钟一次 while-idle alarm，取满。 */
-    private static final long WATCHDOG_MS = 9 * 60 * 1000L;
-    /** 唤醒锁硬顶 12 小时：正常测试跑不到，纯粹防泄漏。 */
-    private static final long MAX_WAKE_MS = 12 * 60 * 60 * 1000L;
 
     private static final int NOTIF_ID = 1001;
     private static final int NOTIF_ID_ALERT = 1002;
@@ -95,18 +65,8 @@ public class SamplerService extends Service {
     public static volatile double chargeSeconds = 0;
     /** 当前实际采样间隔（秒），界面上直接显示，让人知道 App 在省电。 */
     public static volatile long currentIntervalS = 5;
-    /** 采样任务实际执行时间比计划晚了 3 个间隔以上的次数 —— 被系统冻过的证据。 */
-    public static volatile int freezeCount = 0;
-    /** 唤醒锁有没有拿住。界面据此提示"防护生效中 / 拿不到唤醒锁"。 */
-    public static volatile boolean wakeHeld = false;
 
-    private HandlerThread worker;
     private Handler handler;
-    private PowerManager.WakeLock wakeLock;
-    /** 单调时钟起点，CSV 的 t_s 全部相对它。 */
-    private long t0Elapsed;
-    /** 下一次采样原定执行的 elapsed 时刻，用来量被打断了多久。 */
-    private long nextAtElapsed;
     private BatteryManager bm;
     private BufferedWriter out;
     private long t0;
@@ -123,28 +83,18 @@ public class SamplerService extends Service {
     private final Runnable sampleTask = new Runnable() {
         @Override public void run() {
             if (!running) return;
-            long now = SystemClock.elapsedRealtime();
-            // 计划时刻和实际时刻差出 3 个间隔，就是被冻过。这个计数只给人看，
-            // 真正的空档长度由分析侧用相邻点的 t 差量，不依赖它。
-            if (nextAtElapsed > 0 && now - nextAtElapsed > 3 * currentIntervalMs) {
-                freezeCount++;
-            }
             try {
                 sampleOnce();
             } catch (Exception ignored) {
                 // 单次采样失败不该中断整场测试
             }
-            nextAtElapsed = SystemClock.elapsedRealtime() + currentIntervalMs;
             handler.postDelayed(this, currentIntervalMs);
         }
     };
 
     @Override public void onCreate() {
         super.onCreate();
-        // 采样放独立线程：主线程要刷界面，卡一下就少一个点。
-        worker = new HandlerThread("bhbench-sampler");
-        worker.start();
-        handler = new Handler(worker.getLooper());
+        handler = new Handler(Looper.getMainLooper());
         bm = (BatteryManager) getSystemService(BATTERY_SERVICE);
         createChannel();
     }
@@ -152,12 +102,6 @@ public class SamplerService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopSampling();
-            return START_NOT_STICKY;
-        }
-        if (intent != null && ACTION_WATCHDOG.equals(intent.getAction())) {
-            // 只是被闹钟叫醒，不是用户点了开始。没在跑就安静退出，
-            // 千万别走下面的 stopSelf() 分支 —— 那是给 sticky 重启用的。
-            if (running) scheduleWatchdog();
             return START_NOT_STICKY;
         }
         if (!running) {
@@ -192,8 +136,6 @@ public class SamplerService extends Service {
         currentIntervalS = interval / 1000L;
         t0 = System.currentTimeMillis();
         startedAt = t0;
-        t0Elapsed = SystemClock.elapsedRealtime();
-        nextAtElapsed = 0;
         sampleCount = 0;
         dischargePoints = 0;
         chargePoints = 0;
@@ -202,7 +144,6 @@ public class SamplerService extends Service {
         lastSampleT = -1;
         lastCounterMah = -1;
         lowBatteryNotified = false;
-        freezeCount = 0;
 
         File dir = getExternalFilesDir(null);
         if (dir == null) dir = getFilesDir();
@@ -231,76 +172,13 @@ public class SamplerService extends Service {
         currentFile = file.getAbsolutePath();
 
         Notification n = buildNotification("正在记录…", "点击返回应用");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // 34 起 dataSync 有 6 小时/24 小时的总量上限，放电测试经常超，
-            // 会被系统直接停掉。specialUse 没有这个天花板。
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
             startForeground(NOTIF_ID, n);
         }
 
-        acquireWakeLock();
-        scheduleWatchdog();
-
-        nextAtElapsed = SystemClock.elapsedRealtime();
         handler.post(sampleTask);
-    }
-
-    /**
-     * 拿住 CPU 唤醒锁。这是防冻结里唯一真正管用的一层：
-     * CPU 一旦进 suspend，Handler 的 delayed 消息就不会按时发出来，
-     * 前台服务只能保证进程不被杀，保证不了线程被调度。
-     */
-    private void acquireWakeLock() {
-        if (wakeLock != null && wakeLock.isHeld()) { wakeHeld = true; return; }
-        try {
-            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-            if (pm == null) return;
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "bhbench:sampling");
-            wakeLock.setReferenceCounted(false);
-            wakeLock.acquire(MAX_WAKE_MS);
-            wakeHeld = wakeLock.isHeld();
-        } catch (Exception e) {
-            // 拿不到不该让整场测试开不起来，只是要如实告诉用户
-            wakeHeld = false;
-        }
-    }
-
-    private void releaseWakeLock() {
-        try {
-            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        } catch (Exception ignored) {
-        }
-        wakeLock = null;
-        wakeHeld = false;
-    }
-
-    /** setAndAllowWhileIdle 不需要 SCHEDULE_EXACT_ALARM，Doze 下每 9 分钟允许一次。 */
-    private void scheduleWatchdog() {
-        AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
-        if (am == null) return;
-        try {
-            am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    SystemClock.elapsedRealtime() + WATCHDOG_MS, watchdogIntent());
-        } catch (Exception ignored) {
-        }
-    }
-
-    private void cancelWatchdog() {
-        AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
-        if (am == null) return;
-        try {
-            am.cancel(watchdogIntent());
-        } catch (Exception ignored) {
-        }
-    }
-
-    private PendingIntent watchdogIntent() {
-        Intent i = new Intent(this, SamplerService.class).setAction(ACTION_WATCHDOG);
-        return PendingIntent.getService(this, 100, i,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     private Notification buildNotification(String title, String text) {
@@ -321,8 +199,8 @@ public class SamplerService extends Service {
     }
 
     private void sampleOnce() throws IOException {
-        // 单调时钟：跨 NTP 校时不变，dt 不会突然变负或被拉长
-        double tSec = (SystemClock.elapsedRealtime() - t0Elapsed) / 1000.0;
+        long now = System.currentTimeMillis();
+        double tSec = (now - t0) / 1000.0;
 
         long counterUah = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER);
         int currentUa = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW);
@@ -442,8 +320,6 @@ public class SamplerService extends Service {
     private void stopSampling() {
         running = false;
         handler.removeCallbacks(sampleTask);
-        cancelWatchdog();
-        releaseWakeLock();
         try {
             if (out != null) out.close();
         } catch (IOException ignored) {
@@ -455,12 +331,6 @@ public class SamplerService extends Service {
 
     @Override public void onDestroy() {
         if (running) stopSampling();
-        cancelWatchdog();
-        releaseWakeLock();
-        if (worker != null) {
-            worker.quitSafely();
-            worker = null;
-        }
         super.onDestroy();
     }
 

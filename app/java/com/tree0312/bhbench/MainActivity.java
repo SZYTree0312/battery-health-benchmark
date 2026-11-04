@@ -8,14 +8,11 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.PowerManager;
-import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -357,12 +354,7 @@ public class MainActivity extends Activity {
                  .append("   充电 ")
                  .append(dur(Math.round(SamplerService.chargeSeconds)))
                  .append("\n采样间隔  ").append(SamplerService.currentIntervalS).append(" 秒")
-                 .append(SamplerService.currentIntervalS > 5 ? "（电量没动，自动放宽）" : "")
-                 .append("\n防冻结  ")
-                 .append(SamplerService.wakeHeld ? "唤醒锁已持" : "唤醒锁没拿到")
-                 .append(SamplerService.freezeCount > 0
-                         ? "   被系统冻过 " + SamplerService.freezeCount + " 次"
-                         : "   没被打断过");
+                 .append(SamplerService.currentIntervalS > 5 ? "（电量没动，自动放宽）" : "");
         } else if (SamplerService.currentFile != null) {
             extra.append("上次记录：").append(new File(SamplerService.currentFile).getName());
         }
@@ -418,26 +410,6 @@ public class MainActivity extends Activity {
         toast(plugged
                 ? "已开始记录充电段。保持插着充到 100% 即可"
                 : "已开始记录放电段。到 15% 左右再插充电器");
-    }
-
-    /**
-     * 只跳一次系统确认框，把本应用从电池优化名单里摘出去。
-     *
-     * 这条比前台服务更关键：Doze 判定应用"闲置"后可以直接冻结进程，
-     * 前台服务和唤醒锁在国产 ROM 的额外策略下都可能被绕过，唯独
-     * "不优化"白名单是系统层面承认的。用户不点也不影响测量，
-     * 只是更容易被冻 —— 所以界面会显示被冻次数，让他自己判断。
-     */
-    private void requestBatteryExemption() {
-        try {
-            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-            if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) return;
-            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-            i.setData(Uri.parse("package:" + getPackageName()));
-            startActivity(i);
-        } catch (Exception ignored) {
-            // 有的 ROM 砍掉了这个入口，静默跳过
-        }
     }
 
     /** 当前是否插着充电器（充电中或已充满）。 */
