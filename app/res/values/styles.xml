@@ -1,8 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 浅色：界面本身全部代码绘制，这里只管系统对话框和窗口底色 -->
+    <!-- 跟随系统（白天分支）。夜间由 values-night/ 里的同名 style 覆盖。
+         界面本身全部代码绘制，这里只管窗口底色、状态栏图标和系统对话框。 -->
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">#FFFFFF</item>
         <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <!-- 手动强制浅色。不能复用 AppTheme：系统处于夜间时 -night 版本会把它顶掉。 -->
+    <style name="AppThemeLight" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <!-- 手动强制深色。用户可能在系统白天时选它，所以这个 style 必须放在
+         values/（无 -night 限定符）里，否则白天根本引用不到。 -->
+    <style name="AppThemeDark" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#101010</item>
+        <item name="android:colorBackground">#101010</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

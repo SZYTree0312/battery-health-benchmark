@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 深色：跟随系统夜间模式。AlertDialog 等系统控件会一并变深 -->
+    <!-- 跟随系统：夜间分支。只覆盖 AppTheme（跟随系统那一份），
+         AppThemeLight / AppThemeDark 是手动强制模式，不受这里影响。 -->
     <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">#101010</item>
         <item name="android:colorBackground">#101010</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

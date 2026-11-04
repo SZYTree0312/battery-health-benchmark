@@ -93,6 +93,8 @@ public class ChargerProbeActivity extends Activity {
     };
 
     @Override protected void onCreate(Bundle saved) {
+        // 必须在 super.onCreate() 之前：窗口底色和状态栏图标由主题决定
+        ThemeMode.apply(this);
         super.onCreate(saved);
         pal = Palette.of(this);
         bm = (BatteryManager) getSystemService(BATTERY_SERVICE);

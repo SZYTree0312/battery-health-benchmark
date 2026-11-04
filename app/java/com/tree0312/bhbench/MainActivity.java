@@ -2,6 +2,7 @@ package com.tree0312.bhbench;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
@@ -58,6 +59,8 @@ public class MainActivity extends Activity {
     };
 
     @Override protected void onCreate(Bundle saved) {
+        // 必须在 super.onCreate() 之前：窗口底色和状态栏图标由主题决定
+        ThemeMode.apply(this);
         super.onCreate(saved);
         pal = Palette.of(this);
         bm = (BatteryManager) getSystemService(BATTERY_SERVICE);
@@ -99,6 +102,7 @@ public class MainActivity extends Activity {
 
     private View buildUi() {
         ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(pal.bg);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(18), dp(12) + statusBarH(), dp(18), dp(24));
@@ -195,6 +199,15 @@ public class MainActivity extends Activity {
         lp3.topMargin = dp(8);
         root.addView(btnCharger, lp3);
 
+        // 显示模式。按钮上直接写当前模式，不用点进去才知道。
+        Button btnTheme = new Button(this);
+        btnTheme.setText("显示模式 · " + ThemeMode.label(ThemeMode.get(this)));
+        btnTheme.setOnClickListener(v -> showThemeDialog());
+        LinearLayout.LayoutParams lp4 = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
+        lp4.topMargin = dp(8);
+        root.addView(btnTheme, lp4);
+
         // 设备信息
         tvDevice = new TextView(this);
         tvDevice.setTextSize(11);
@@ -215,6 +228,30 @@ public class MainActivity extends Activity {
         root.addView(tvResult);
 
         return scroll;
+    }
+
+    /**
+     * 三态切换。选完清空整个 task 栈重开主界面 —— 光 recreate() 的话，
+     * 后退栈里已经建好的结果页/历史页还留着旧主题，按返回键就会看到半套配色。
+     * 前台采样服务不受 Activity 栈影响，不会被打断。
+     */
+    private void showThemeDialog() {
+        final String[] labels = {"跟随系统", "浅色", "深色"};
+        final int[] modes = {ThemeMode.SYSTEM, ThemeMode.LIGHT, ThemeMode.DARK};
+        int cur = ThemeMode.get(this);
+        int checked = cur == ThemeMode.LIGHT ? 1 : (cur == ThemeMode.DARK ? 2 : 0);
+
+        new AlertDialog.Builder(this)
+                .setTitle("显示模式")
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    ThemeMode.set(this, modes[which]);
+                    d.dismiss();
+                    Intent i = new Intent(this, MainActivity.class);
+                    i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     // ------------------------------------------------------------ 状态

@@ -1,18 +1,17 @@
 package com.tree0312.bhbench;
 
 import android.content.Context;
-import android.content.res.Configuration;
 import android.graphics.Color;
 
 /**
- * 统一色板 —— 跟随系统的深色/浅色设置。
+ * 统一色板 —— 深色/浅色，支持用户手动覆盖系统设置。
  *
  * 为什么不用 XML 主题把颜色定义好：这个 App 的界面全是代码画的，没有布局文件，
  * 颜色散在四个 Activity 和两个自定义 View 里。用一套 Java 常量集中定义，
  * 改配色就改这一个文件，比在 XML 和代码之间来回对要省事。
  *
- * 判断依据是系统夜间模式（uiMode 的 NIGHT 位）。用户在系统设置里切换后，
- * Activity 会被重建（Manifest 没拦 configChanges），这里重新取值即可。
+ * 深浅由 ThemeMode.isDark() 决定：用户选「跟随系统」时读 uiMode 的 NIGHT 位，
+ * 选「浅色」/「深色」时直接按用户的选择。切换后 Activity 会重建，这里重新取值。
  */
 public final class Palette {
 
@@ -53,9 +52,7 @@ public final class Palette {
     public final int chartGap;      // 空档带
 
     public static Palette of(Context c) {
-        int mode = c.getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK;
-        return new Palette(mode == Configuration.UI_MODE_NIGHT_YES);
+        return new Palette(ThemeMode.isDark(c));
     }
 
     private Palette(boolean dark) {
