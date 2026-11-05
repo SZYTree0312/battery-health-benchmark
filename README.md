@@ -616,18 +616,22 @@ for s in r.scales: print(s.step_s, s.points, round(s.integral_mah,1), round(s.er
   v0.5.1 / v0.5.2 已装该机，显示模式三态、深浅原生配色、状态栏跟随、
   充电器体检页均已跑通；v0.5.3 的唤醒动画、界面两段式、设置页、连续段积分
   对账均已逐屏截图核对。
-  **v0.5.5 的常亮精度验证已装机打开**：Xiaomi 25113PN0EC / Android 17 上
-  页面排版正常、点开始后采样连续（`mWakefulness=Awake`，实时 k 有数），
-  算法层在 JVM 与 Python 两侧也验过；完整的 10 分钟结论待跑完出报告。
+  **v0.5.5 的常亮精度验证已装机跑通**：Xiaomi 25113PN0EC / Android 17 上
+  页面排版正常、点开始后 `mWakefulness=Awake`、5 秒采样**间隔抖动仅约 3 ms、
+  全程无空档**；切到后台后 `onStop` 立刻收尾并落盘 CSV，PC 端原样读回，
+  ∫I/ΔCC ≈ 0.9（与「CURRENT_NOW 读数偏低」同向）。真机 CSV 留作
+  `tests/fixtures/accuracy_real_65s.csv`。算法层在 JVM 与 Python 两侧也验过；
+  完整的 10 分钟结论待跑完出报告。
   另未点完：充电器档案有数据态、结果页曲线图排版
 - **adb 通道**：同一台机器实测 sysfs 0/8 全封，`dumpsys` 库仑计可用，
   守护进程跨 adb 连接存活，采样抖动 0.3 ms
-- **analyzer**：`python -m unittest discover -s tests -v` 89 项全过，
+- **analyzer**：`python -m unittest discover -s tests -v` 91 项全过，
   覆盖真机稀疏会话、三份合成数据、无库仑计的稀疏退化、曲线拟合与 SVG 分层、
   充电功率台阶检测与协议档位边界、系统 history 解析与时间对齐、
   连续段积分对账（有偏电流 / 空档隔离 / 短块剔除）、
   未插电拒测（伪造正功率 / 中途拔线 / 旧 CSV 兼容）、
-  积分精度对账（完全一致 / 固定偏 / 漂移偏 / 尖峰失收敛 / 空档切块 / CSV 往返）
+  积分精度对账（完全一致 / 固定偏 / 漂移偏 / 尖峰失收敛 / 空档切块 /
+  CSV 往返 / 真机 65 秒夹具）
 - 其他厂商机型**未实测**，支持矩阵按驱动路径推断
 
 ## 暂不覆盖 iOS / 鸿蒙

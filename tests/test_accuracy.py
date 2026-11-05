@@ -130,6 +130,41 @@ class GapTest(unittest.TestCase):
         self.assertGreater(full_dcc, block_dcc, "全长首尾差会算进空档的电荷")
 
 
+class RealDeviceFixtureTest(unittest.TestCase):
+    """真机 65 秒的一段（Xiaomi 25113PN0EC / Android 17，充电 85%）。
+
+    这份数据是 v0.5.5 常亮页面跑出来的：用户切到后台后 onStop 立刻收尾，
+    CSV 落盘。留作夹具锁住两件事：
+      1. 常亮期间 5 秒采样严格连续（实测抖动约 3 ms），没有空档
+      2. App 导出的 8 列格式 PC 端能原样读回来
+    时长不足 2 分钟，所以正确行为是判「数据不足」，不是硬凑一个结论。
+    """
+
+    PATH = ROOT / "tests" / "fixtures" / "accuracy_real_65s.csv"
+
+    def test_real_csv_parses_and_is_gapless(self) -> None:
+        pts = load_accuracy_csv(str(self.PATH))
+        self.assertEqual(len(pts), 14)
+        gaps = [b.t_s - a.t_s for a, b in zip(pts, pts[1:])]
+        self.assertTrue(all(4.9 < g < 5.1 for g in gaps),
+                        f"常亮期间不该有空档，实际间隔 {gaps}")
+        self.assertTrue(all(p.plugged for p in pts))
+        self.assertTrue(all(p.status == "charging" for p in pts))
+        self.assertAlmostEqual(pts[-1].counter_mah - pts[0].counter_mah, 18.0,
+                               delta=1.0)
+
+    def test_short_real_run_refuses_to_conclude(self) -> None:
+        pts = load_accuracy_csv(str(self.PATH))
+        r = analyze(pts, 5.0)
+        self.assertFalse(r.valid)
+        self.assertIn("没有一段连续采样够 2 分钟", r.note)
+        # 结论不给，但原始积分量级仍应与 ΔCC 对得上（真机约 0.9，
+        # 方向与「CURRENT_NOW 读数偏低」一致）
+        q = integrate(pts)
+        dcc = pts[-1].counter_mah - pts[0].counter_mah
+        self.assertAlmostEqual(q / dcc, 0.9, delta=0.2)
+
+
 class PrimitiveTest(unittest.TestCase):
 
     def test_decimate_keeps_endpoints(self) -> None:
