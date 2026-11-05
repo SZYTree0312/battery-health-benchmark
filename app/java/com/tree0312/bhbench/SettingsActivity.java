@@ -84,6 +84,15 @@ public class SettingsActivity extends Activity {
         displayCard.addView(themeRow.view);
         root.addView(displayCard);
 
+        // ---- 测量工具：实验性功能，不占主界面两段的位置
+        root.addView(Ui.section(this, pal, "测量工具"));
+        LinearLayout tools = Ui.card(this, pal);
+        Ui.NavRow accuracy = Ui.navRow(this, pal, "积分精度验证", "常亮充电");
+        accuracy.view.setOnClickListener(v ->
+                startActivity(new Intent(this, AccuracyActivity.class)));
+        tools.addView(accuracy.view);
+        root.addView(tools);
+
         // ---- 数据
         root.addView(Ui.section(this, pal, "数据"));
         LinearLayout dataCard = Ui.card(this, pal);
@@ -106,6 +115,8 @@ public class SettingsActivity extends Activity {
         TextView note = new TextView(this);
         note.setText("容量测量靠库仑计首尾差算实际电荷量，不用电流积分 —— "
                 + "息屏后系统会拉长采样间隔，积分会漏掉大段时间。\n"
+                + "想验证积分准不准，去「积分精度验证」：充电时保持页面常亮、"
+                + "屏幕不熄，跑满 10 分钟，一次测完多尺度对账。\n"
                 + "充电器体检只能读电池侧的电压电流，手机读不到 USB 输入侧的 VBUS/IBUS，"
                 + "所以协议只给区间和置信度，不给名字。");
         note.setTextSize(11);

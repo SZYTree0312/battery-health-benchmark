@@ -44,6 +44,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".AccuracyActivity"
+            android:label="积分精度验证"
+            android:exported="false" />
+        <activity
             android:name=".SettingsActivity"
             android:label="设置"
             android:exported="false" />
