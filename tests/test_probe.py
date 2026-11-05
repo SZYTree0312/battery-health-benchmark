@@ -34,7 +34,8 @@ def synth(segments, interval_ms: int = 200, temp: float = 30.0,
         n = int(seconds * 1000 / interval_ms)
         for _ in range(n):
             out.append(ProbePoint(t_ms=t, vbat=vbat, ibat=ibat,
-                                  temp_c=temp, soc_pct=soc, status="charging"))
+                                  temp_c=temp, soc_pct=soc, status="charging",
+                                  plugged=True))
             t += interval_ms
     return out
 
@@ -67,6 +68,7 @@ class StepDetectionTest(unittest.TestCase):
         t = 0.0
         for i in range(200):
             pts.append(ProbePoint(t_ms=t, vbat=4.2, ibat=1.0 + i * 0.01,
+                                  plugged=True,
                                   temp_c=30, soc_pct=50, status="charging"))
             t += 200
         r = analyze(pts)

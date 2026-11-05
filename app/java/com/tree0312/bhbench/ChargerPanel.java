@@ -57,6 +57,8 @@ final class ChargerPanel {
     private final BatteryManager bm;
 
     private boolean running = false;
+    /** 采集中途拔过充电器 —— 这次整段作废，不能出结论、不能入档。 */
+    private boolean aborted = false;
     /** 当前这段是否显示着。隐藏时不做空闲预览刷新，省掉无谓的广播读取。 */
     private boolean visible = true;
     private long startTs = 0;
@@ -84,7 +86,10 @@ final class ChargerPanel {
     private final Runnable loop = new Runnable() {
         @Override public void run() {
             if (running) {
-                collect();
+                if (!collect()) {          // 中途拔线，collect 已收尾
+                    ui.postDelayed(this, 1000);   // 循环还得活着，回去刷空闲预览
+                    return;
+                }
                 long elapsed = System.currentTimeMillis() - startTs;
                 if (elapsed >= ChargerProbe.DURATION_MS) {
                     stopProbe("体检完成");
@@ -121,7 +126,7 @@ final class ChargerPanel {
 
         TextView sub = new TextView(act);
         sub.setText("测的是这台手机实际吃进去多少功率，不是充电器标称值。"
-                + "插上充电器点开始，跑 90 秒。");
+                + "没插充电器时这里不显示功率。插上充电器点开始，跑 90 秒。");
         sub.setTextSize(12);
         sub.setTextColor(pal.textTertiary);
         sub.setLineSpacing(dp(3), 1f);
@@ -269,18 +274,34 @@ final class ChargerPanel {
         if (running) return;
         ChargerProbe.Point p = read();
         if (p == null) return;
+        if (!p.plugged) {
+            // 放电时 CURRENT_NOW 是负的，abs(V×I) 会变成一个像模像样的
+            // 「充电功率」。这里不显示任何数，直接说明没插充电器。
+            tvPower.setText("—");
+            tvDetail.setText("未连接充电器");
+            tvStatus.setText("插上充电器才能测功率");
+            return;
+        }
         tvPower.setText(String.format(Locale.US, "%.1f", p.pWatt));
         tvDetail.setText(String.format(Locale.US,
                 "电压 %.2f V   电流 %.2f A   电量 %d%%   %.1f °C",
                 p.vbat, Math.abs(p.ibat), p.soc, p.tempC));
+        tvStatus.setText("full".equals(p.status) ? "已充满，功率会接近 0" : "实时功率");
     }
 
-    private void collect() {
+    /** 返回 false = 采集中途拔线，调用方别再排下一次采样。 */
+    private boolean collect() {
         ChargerProbe.Point p = read();
-        if (p == null) return;
+        if (p == null) return true;
+        if (!p.plugged) {
+            aborted = true;
+            stopProbe("充电器已断开，本次作废");
+            return false;
+        }
         p.tMs = p.tMs - startTs;
         points.add(p);
         refreshLive();
+        return true;
     }
 
     private void refreshLive() {
@@ -303,6 +324,9 @@ final class ChargerPanel {
         int scale = b.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
         int st = b.getIntExtra(BatteryManager.EXTRA_STATUS,
                 BatteryManager.BATTERY_STATUS_UNKNOWN);
+        // EXTRA_PLUGGED 直接反映插拔，比 status 及时，也不受厂商对
+        // CURRENT_NOW 正负号约定不一致的影响。没插电就不该产生功率。
+        int plugged = b.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
 
         int curUa = bm != null
                 ? bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) : 0;
@@ -314,7 +338,8 @@ final class ChargerPanel {
         p.tempC = tempTenth / 10.0;
         p.soc = (level >= 0 && scale > 0) ? Math.round(level * 100f / scale) : -1;
         p.status = statusName(st);
-        p.pWatt = Math.abs(p.vbat * p.ibat);
+        p.plugged = plugged > 0;
+        p.pWatt = p.plugged ? Math.abs(p.vbat * p.ibat) : 0;
         return p;
     }
 
@@ -344,6 +369,12 @@ final class ChargerPanel {
 
     private void startProbe() {
         if (running) return;
+        ChargerProbe.Point first = read();
+        if (first == null || !first.plugged) {
+            toast("先插上充电器，再开始体检");
+            return;
+        }
+        aborted = false;
         points.clear();
         tickSinceRedraw = 0;
         startTs = System.currentTimeMillis();
@@ -371,7 +402,11 @@ final class ChargerPanel {
         tvStatus.setText(why);
 
         if (points.size() < 5) {
-            toast("点太少，重测一次");
+            showInvalid(why, aborted
+                    ? "采集中途断开了充电器，这次不作数"
+                    : "采样点太少，重测一次");
+            lastResult = null;
+            lastGuess = null;
             return;
         }
 
@@ -380,8 +415,24 @@ final class ChargerPanel {
         lastGuess = ProtocolGuess.from(lastResult, charging);
 
         refreshChart();
-        saveCsv();
+        saveCsv();   // 原始点留作诊断，即使这次作废也不删
+        if (aborted || !charging || lastResult == null || !lastResult.valid) {
+            showInvalid(why, lastResult == null ? "没有数据" : lastResult.note);
+            lastResult = null;   // 断掉误存的最后一道：结果都没了，保存按钮也不会出现
+            lastGuess = null;
+            return;
+        }
         showResult();
+    }
+
+    /** 无效的一次：说清为什么，不给峰值、不给协议、不给保存。 */
+    private void showInvalid(String why, String note) {
+        resultBox.removeAllViews();
+        String msg = aborted ? "采集中途断开了充电器，这次不作数"
+                : (!note.isEmpty() ? note : why);
+        addLine(resultBox, msg, 14, pal.bad, dp(10));
+        addLine(resultBox, "插好充电器、保持连接，重新跑一次 90 秒。", 12,
+                pal.textTertiary, dp(6));
     }
 
     // ------------------------------------------------------------ 结果
@@ -809,11 +860,14 @@ final class ChargerPanel {
             File f = new File(probes, "probe_" + stamp + ".csv");
 
             try (BufferedWriter out = new BufferedWriter(new FileWriter(f, false))) {
-                out.write("t_s,vbat_v,ibat_a,temp_c,soc_pct,status,p_watt\n");
+                out.write("t_s,vbat_v,ibat_a,temp_c,soc_pct,status,p_watt,plugged\n");
                 for (ChargerProbe.Point p : points) {
-                    out.write(String.format(Locale.US, "%.2f,%.3f,%.3f,%d,%.1f,%s,%.2f%n",
-                            p.tMs / 1000.0, p.vbat, p.ibat, p.soc, p.tempC,
-                            p.status, p.pWatt));
+                    // 表头顺序是 temp_c,soc_pct —— 旧版把这两个值写反了，顺手对齐。
+                    // 末尾 plugged 列别漏：格式串少一个 %d 的话 String.format 不报错，
+                    // 只是静默丢掉这个参数，导出的 CSV 会缺列。
+                    out.write(String.format(Locale.US, "%.2f,%.3f,%.3f,%.1f,%d,%s,%.2f,%d%n",
+                            p.tMs / 1000.0, p.vbat, p.ibat, p.tempC, p.soc,
+                            p.status, p.pWatt, p.plugged ? 1 : 0));
                 }
             }
         } catch (Exception ignored) {

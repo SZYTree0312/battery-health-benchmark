@@ -34,11 +34,15 @@ class ProbePoint:
     temp_c: float
     soc_pct: int
     status: str = ""
+    # 与 Java 侧 ChargerProbe.Point 对齐：没插充电器时 p_watt 必须是 0。
+    # 默认 False —— 采集侧少填一个字段时宁可判无效，也不要凭 abs(V×I)
+    # 把放电电流读成一个正的「充电功率」。
+    plugged: bool = False
     p_watt: float = 0.0
 
     def __post_init__(self) -> None:
         if self.p_watt == 0.0:
-            self.p_watt = abs(self.vbat * self.ibat)
+            self.p_watt = abs(self.vbat * self.ibat) if self.plugged else 0.0
 
 
 @dataclass
@@ -95,33 +99,61 @@ def detect_steps(pts: Sequence[ProbePoint]) -> list[tuple[float, float]]:
     return out
 
 
+def is_charge_point(p: ProbePoint) -> bool:
+    """能不能算「充电器在给手机喂电」。与 Java 侧 isChargePoint 逐字对齐。
+
+    只判电流方向不行（CURRENT_NOW 正负号各厂商不统一），只判 status 也不行
+    （拔线瞬间有的 ROM 还留着 charging）。EXTRA_PLUGGED 是最硬的那个信号。
+    """
+    if not p.plugged:
+        return False
+    st = (p.status or "").lower()
+    return st.startswith("charg") or st.startswith("full")
+
+
+def looks_charging(pts: Sequence[ProbePoint]) -> bool:
+    """这组点是不是在充电。过半即算，与 Java 侧 looksCharging 一致。"""
+    if not pts:
+        return False
+    return sum(1 for p in pts if is_charge_point(p)) > len(pts) / 2
+
+
 def analyze(pts: Sequence[ProbePoint]) -> ProbeResult:
     r = ProbeResult()
     if pts is None or len(pts) < 5:
         r.note = "采样点太少，至少要有 5 个"
         return r
 
-    r.points = len(pts)
-    r.duration_ms = pts[-1].t_ms - pts[0].t_ms
+    # 先摘掉非充电点。旧版直接拿全部点算，p_watt 又是 abs(V×I)，
+    # 放电时负电流被取绝对值，会生成一份看着很正常的充电曲线。
+    use = [p for p in pts if is_charge_point(p)]
+    r.points = len(use)
+    if len(use) < 5:
+        r.note = "这段时间没有插充电器，测不出充电器功率"
+        return r
+    if len(use) < len(pts) * 0.8:
+        r.note = "中途断开过充电器，这次不作数，插好再测"
+        return r
+    r.duration_ms = use[-1].t_ms - use[0].t_ms
     if r.duration_ms < 5000:
-        r.note = "时长不足 5 秒，看不到协商和稳态"
+        r.note = "有效充电时长不足 5 秒，看不到协商和稳态"
         return r
 
     peak, peak_at = 0.0, 0.0
     temp_sum, temp_peak = 0.0, -100.0
-    for p in pts:
+    for p in use:
         if p.p_watt > peak:
-            peak, peak_at = p.p_watt, p.t_ms - pts[0].t_ms
+            peak, peak_at = p.p_watt, p.t_ms - use[0].t_ms
         temp_sum += p.temp_c
         temp_peak = max(temp_peak, p.temp_c)
 
     r.peak_w = peak
     r.peak_at_ms = peak_at
-    r.avg_temp = temp_sum / len(pts)
+    r.avg_temp = temp_sum / len(use)
     r.peak_temp = temp_peak
     r.peak_early = peak_at < r.duration_ms * 0.1
 
-    tail = sorted(p.p_watt for p in pts[len(pts) // 2:])
+    tail = sorted(p.p_watt for p in use[len(use) // 2:])
     med = _median(tail)
     r.steady_w = med
     if med > 0.5 and tail:
@@ -131,19 +163,19 @@ def analyze(pts: Sequence[ProbePoint]) -> ProbeResult:
         r.stability_pct = (p95 - p5) / med * 100.0
 
     wh = 0.0
-    for i in range(1, len(pts)):
-        dt = (pts[i].t_ms - pts[i - 1].t_ms) / 1000.0
+    for i in range(1, len(use)):
+        dt = (use[i].t_ms - use[i - 1].t_ms) / 1000.0
         if dt <= 0:
             continue
-        wh += (pts[i - 1].p_watt + pts[i].p_watt) / 2.0 * dt / 3600.0
+        wh += (use[i - 1].p_watt + use[i].p_watt) / 2.0 * dt / 3600.0
     r.energy_wh = wh
 
-    r.step_events = detect_steps(pts)
+    r.step_events = detect_steps(use)
     r.steps = len(r.step_events)
 
     r.valid = r.peak_w > 0.5
     if not r.valid:
-        r.note = "全程功率接近 0，没在充电？"
+        r.note = "已经充满或功率太小，测不出充电器能力"
     return r
 
 
@@ -244,13 +276,24 @@ def load_probe_csv(path: str) -> list[ProbePoint]:
             if len(p) < 7:
                 continue
             try:
+                st = p[5]
+                # 旧版 CSV 没有 plugged 列：按 status 推断，别把老数据全判废。
+                plugged = (int(float(p[7])) > 0 if len(p) > 7
+                           else st.lower().startswith(("charg", "full")))
+                temp_raw, soc_raw = p[3], p[4]
+                # App 旧版把 temp_c / soc_pct 两列的值写反了：表头是
+                # temp_c,soc_pct，实际却是 soc,temp。新版是 %.1f,%d，
+                # 靠小数点在哪一侧就能无损认出来。
+                if "." not in temp_raw and "." in soc_raw:
+                    temp_raw, soc_raw = soc_raw, temp_raw
                 out.append(ProbePoint(
                     t_ms=float(p[0]) * 1000.0,
                     vbat=float(p[1]),
                     ibat=float(p[2]),
-                    temp_c=float(p[3]),
-                    soc_pct=int(float(p[4])),
-                    status=p[5],
+                    temp_c=float(temp_raw),
+                    soc_pct=int(float(soc_raw)),
+                    status=st,
+                    plugged=plugged,
                     p_watt=float(p[6]),
                 ))
             except ValueError:

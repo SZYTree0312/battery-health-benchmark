@@ -44,7 +44,9 @@ public final class ChargerProbe {
         public double tempC;
         public int soc;
         public String status = "";
-        public double pWatt;    // vbat × ibat
+        /** 是否插着充电器（EXTRA_PLUGGED > 0）。没插电时 pWatt 必须为 0。 */
+        public boolean plugged = false;
+        public double pWatt;    // vbat × ibat，且只在充电时非零
     }
 
     public static class Result {
@@ -71,16 +73,45 @@ public final class ChargerProbe {
         public boolean peakEarly = false;
     }
 
+    /**
+     * 一个点能不能算「充电器在给手机喂电」。
+     *
+     * 两个条件都要：插着充电器（EXTRA_PLUGGED），且状态是 charging / full。
+     * 只判电流方向不行 —— CURRENT_NOW 的正负号各厂商实现不统一，有的正号
+     * 表示放电、有的反过来；只判 status 也不行 —— 有些 ROM 在拔线后的
+     * 一两秒内还留着 charging。EXTRA_PLUGGED 是内核直接反映插拔的，最硬。
+     */
+    public static boolean isChargePoint(Point p) {
+        if (p == null || !p.plugged) return false;
+        String st = p.status == null ? "" : p.status.toLowerCase(java.util.Locale.US);
+        return st.startsWith("charg") || st.startsWith("full");
+    }
+
     public static Result analyze(List<Point> pts) {
         Result r = new Result();
         if (pts == null || pts.size() < 5) {
             r.note = "采样点太少，至少要有 5 个";
             return r;
         }
-        r.points = pts.size();
-        r.durationMs = pts.get(pts.size() - 1).tMs - pts.get(0).tMs;
+
+        // 先把非充电点摘掉。v0.5.3 之前这里直接拿全部点算，而 pWatt 是
+        // abs(V×I) —— 放电时电流为负，绝对值一取就变成正的「充电功率」，
+        // 于是没插充电器跑 90 秒也能出一份漂亮的峰值 / 稳态 / 充入 Wh，
+        // 甚至能存进充电器档案参与对比。数据层必须自己挡住，不能只靠 UI。
+        List<Point> use = new ArrayList<>();
+        for (Point p : pts) if (isChargePoint(p)) use.add(p);
+        r.points = use.size();
+        if (use.size() < 5) {
+            r.note = "这段时间没有插充电器，测不出充电器功率";
+            return r;
+        }
+        if (use.size() < pts.size() * 0.8) {
+            r.note = "中途断开过充电器，这次不作数，插好再测";
+            return r;
+        }
+        r.durationMs = use.get(use.size() - 1).tMs - use.get(0).tMs;
         if (r.durationMs < 5000) {
-            r.note = "时长不足 5 秒，看不到协商和稳态";
+            r.note = "有效充电时长不足 5 秒，看不到协商和稳态";
             return r;
         }
 
@@ -88,21 +119,21 @@ public final class ChargerProbe {
         double peak = 0;
         long peakAt = 0;
         double tempSum = 0, tempPeak = -100;
-        for (Point p : pts) {
-            if (p.pWatt > peak) { peak = p.pWatt; peakAt = p.tMs - pts.get(0).tMs; }
+        for (Point p : use) {
+            if (p.pWatt > peak) { peak = p.pWatt; peakAt = p.tMs - use.get(0).tMs; }
             tempSum += p.tempC;
             tempPeak = Math.max(tempPeak, p.tempC);
         }
         r.peakW = peak;
         r.peakAtMs = peakAt;
-        r.avgTemp = tempSum / pts.size();
+        r.avgTemp = tempSum / use.size();
         r.peakTemp = tempPeak;
         r.peakEarly = peakAt < r.durationMs * 0.1;
 
         // ---- 稳态：后半段中位数
-        int from = pts.size() / 2;
+        int from = use.size() / 2;
         List<Double> tail = new ArrayList<>();
-        for (int i = from; i < pts.size(); i++) tail.add(pts.get(i).pWatt);
+        for (int i = from; i < use.size(); i++) tail.add(use.get(i).pWatt);
         java.util.Collections.sort(tail);
         double med = tail.size() % 2 == 1
                 ? tail.get(tail.size() / 2)
@@ -117,8 +148,8 @@ public final class ChargerProbe {
 
         // ---- 能量
         double wh = 0;
-        for (int i = 1; i < pts.size(); i++) {
-            Point a = pts.get(i - 1), b = pts.get(i);
+        for (int i = 1; i < use.size(); i++) {
+            Point a = use.get(i - 1), b = use.get(i);
             double dt = (b.tMs - a.tMs) / 1000.0;
             if (dt <= 0) continue;
             wh += (a.pWatt + b.pWatt) / 2.0 * dt / 3600.0;
@@ -126,10 +157,10 @@ public final class ChargerProbe {
         r.energyWh = wh;
 
         // ---- 台阶
-        r.steps = detectSteps(pts, r.stepEvents);
+        r.steps = detectSteps(use, r.stepEvents);
 
         r.valid = r.peakW > 0.5;
-        if (!r.valid) r.note = "全程功率接近 0，没在充电？";
+        if (!r.valid) r.note = "已经充满或功率太小，测不出充电器能力";
         return r;
     }
 
@@ -177,8 +208,7 @@ public final class ChargerProbe {
         if (pts == null || pts.isEmpty()) return false;
         int charging = 0;
         for (Point p : pts) {
-            String s = p.status == null ? "" : p.status.toLowerCase(java.util.Locale.US);
-            if (s.startsWith("charg") || s.startsWith("full")) charging++;
+            if (isChargePoint(p)) charging++;
         }
         return charging > pts.size() / 2;
     }
