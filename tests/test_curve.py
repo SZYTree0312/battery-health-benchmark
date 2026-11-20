@@ -19,8 +19,10 @@ sys.path.insert(0, str(ROOT))
 
 from analyzer.core import Sample, analyze, load_csv  # noqa: E402
 from analyzer.curve import (  # noqa: E402
-    SPLIT_GAP_S, counter_soc, count_segments, gap_seconds, gap_stats, hours,
-    linear_fit, max_deviation, robust_fit, soc, summarize, time_weights, to_svg,
+    SPLIT_GAP_S, counter_current, counter_mah, counter_soc, count_segments,
+    gap_seconds, gap_stats, hours,
+    linear_fit, max_deviation, robust_fit, soc, soc_mah, summarize,
+    time_weights, to_svg,
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -213,16 +215,58 @@ class JitterTest(unittest.TestCase):
         self.assertEqual(SPLIT_GAP_S, 60.0)
 
 
+class CounterChartTest(unittest.TestCase):
+
+    def test_counter_and_soc_mah_agree(self) -> None:
+        """1% = 50 mAh（标称 5000），理想数据两条线应该重合。"""
+        seq = make([(0, 100, 5000), (600, 98, 4900), (1200, 96, 4800)])
+        c = counter_mah(seq)
+        s = soc_mah(seq, 5000)
+        self.assertEqual(c, [0, 100, 200])
+        self.assertEqual(s, [0, 100, 200])
+
+    def test_charge_direction(self) -> None:
+        seq = make([(0, 40, 2000), (600, 42, 2100), (1200, 44, 2200)])
+        self.assertEqual(counter_mah(seq, charge_mode=True), [0, 100, 200])
+        self.assertEqual(soc_mah(seq, 5000, charge_mode=True), [0, 100, 200])
+
+    def test_counter_current_window(self) -> None:
+        # 每秒掉 1 mAh = 3600 mA。2 分钟窗口差分应还原这个数。
+        pts = [(t, 100 - t / 600.0, 5000 - t)
+               for t in range(0, 360, 5)]
+        seq = make(pts)
+        cur = counter_current(seq, 120.0)
+        self.assertGreater(len(cur.ma), 0)
+        for v in cur.ma:
+            self.assertAlmostEqual(v, 3600.0, delta=1.0)
+
+    def test_counter_current_skips_gap(self) -> None:
+        # 中间 4 小时空档，窗口不许跨过去
+        seq = make([(0, 100, 5000), (60, 99, 4940),
+                    (60 + 4 * 3600, 90, 4500), (60 + 4 * 3600 + 60, 89, 4440)])
+        cur = counter_current(seq, 120.0)
+        self.assertEqual(len(cur.ma), 0, "窗口不该跨过 4 小时空档")
+
+    def test_no_counter_returns_none(self) -> None:
+        seq = make([(0, 100, 0), (600, 90, 0), (1200, 80, 0)])
+        self.assertIsNone(counter_mah(seq))
+        self.assertEqual(len(counter_current(seq, 120.0).ma), 0)
+
+
 class SvgTest(unittest.TestCase):
 
     def test_svg_contains_all_layers(self) -> None:
-        seq = make([(0, 100, 5000), (3600, 90, 4500), (7200, 80, 4000)])
+        # 每分钟一个点，counter 每秒掉 1 mAh —— 2 分钟窗口才有差分电流线
+        seq = make([(t, 100 - t / 600.0, 5000 - t) for t in range(0, 7200, 60)])
         svg = to_svg(seq, 5000)
         self.assertTrue(svg.startswith("<svg"))
         self.assertTrue(svg.rstrip().endswith("</svg>"))
         self.assertIn("#2654be", svg)        # 实测线
         self.assertIn("#969696", svg)        # 拟合虚线
         self.assertIn("#d68224", svg)        # 库仑计线
+        self.assertIn("#7f77dd", svg)        # 库仑计差分电流线
+        self.assertIn("mAh", svg)            # 纵轴不再是百分比
+        self.assertIn("mA", svg)             # 右轴电流
         self.assertIn("R²=", svg)
 
     def test_svg_without_counter(self) -> None:

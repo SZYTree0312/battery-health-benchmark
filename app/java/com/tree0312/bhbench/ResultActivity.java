@@ -48,6 +48,9 @@ public class ResultActivity extends Activity {
 
     // 曲线数据在 onCreate 里一次算好，buildUi 只负责摆位置
     private double[] chartX, chartSoc, chartFit, chartCounter;
+    // v0.5.6：曲线纵轴换成 mAh，这几组给图用；上面那几组仍是 %，给偏差文案用
+    private double[] chartSocMah, chartFitMah, chartCounterMah;
+    private double[] chartCurX, chartCurY, chartCurRead;
     private long[] chartGaps;
     private CurveFit.Line chartLine;
     private CurveFit.GapStats chartGaps2;
@@ -87,6 +90,25 @@ public class ResultActivity extends Activity {
         chartLine = CurveFit.robustFit(chartX, chartSoc);
         if (chartLine.valid) chartFit = CurveFit.eval(chartX, chartLine);
         chartCounter = CurveFit.counterSoc(report.segment, report.designMah, report.isChargeMode());
+
+        // ---- 曲线数据换成电荷口径。SOC 只有 1% 台阶（这台机 = 70 mAh），
+        // 库仑计是 1 mAh；画在百分比轴上，库仑计的细度全被压没了。
+        boolean charge = report.isChargeMode();
+        chartSocMah = CurveFit.socMah(report.segment, report.designMah, charge);
+        chartCounterMah = CurveFit.counterMah(report.segment, charge);
+        if (chartFit != null && report.designMah > 0 && !report.segment.isEmpty()) {
+            double s0 = report.segment.get(0).soc;
+            double sign = charge ? 1 : -1;
+            chartFitMah = new double[chartFit.length];
+            for (int i = 0; i < chartFit.length; i++) {
+                chartFitMah[i] = (chartFit[i] - s0) * report.designMah / 100.0 * sign;
+            }
+        }
+        // 2 分钟窗口：1 mAh 量化在 5 秒上就是 720 mA 台阶，不能用短窗口
+        CurveFit.CurrentSeries cs = CurveFit.counterCurrent(report.segment, 120);
+        chartCurX = cs.tHours;
+        chartCurY = cs.ma;
+        chartCurRead = cs.readingMa;
 
         chartGaps = new long[report.segment.size() - 1];
         for (int i = 1; i < report.segment.size(); i++) {
@@ -224,7 +246,7 @@ public class ResultActivity extends Activity {
      * 一条是库仑计反推的真实电荷。有了这两条，图才不只是好看。
      */
     private View buildChart() {
-        if (chartX == null || chartSoc == null || chartX.length < 3) return null;
+        if (chartX == null || chartSocMah == null || chartX.length < 3) return null;
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -242,9 +264,24 @@ public class ResultActivity extends Activity {
         box.addView(title);
 
         SocChartView chart = new SocChartView(this);
-        chart.setData(chartX, chartSoc, chartFit, chartCounter, chartGaps);
+        // 主图只画电荷：电流和电荷量纲不同，叠在一起真机上看不清。
+        chart.setData(chartX, chartSocMah, chartFitMah, chartCounterMah,
+                null, null, null, chartGaps);
         box.addView(chart, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(188)));
+
+        if (chartCurX != null && chartCurX.length > 1) {
+            TextView ct = new TextView(this);
+            ct.setText("电流对照");
+            ct.setTextSize(13);
+            ct.setTextColor(pal.textTertiary);
+            ct.setPadding(0, dp(12), 0, dp(8));
+            box.addView(ct);
+            CurrentChartView currents = new CurrentChartView(this);
+            currents.setData(chartCurX, chartCurRead, chartCurY);
+            box.addView(currents, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(124)));
+        }
 
         if (chartLine != null && chartLine.valid) {
             TextView rate = new TextView(this);

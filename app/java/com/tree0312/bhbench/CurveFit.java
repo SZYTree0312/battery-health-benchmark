@@ -215,6 +215,104 @@ public final class CurveFit {
         return out;
     }
 
+    // ------------------------------------------------------------ 库仑计直接成图
+
+    /**
+     * 从起点累计的电荷变化量（mAh）。充放电都返回正值，方便画在同一条 0 起的轴上。
+     *
+     * 为什么不直接画 counter 的绝对值：这台机充满时系统会把 counter 重标定到
+     * 4605 mAh 附近（满电直读），而真实放电量是 6561 mAh（首尾差）。绝对值
+     * 跨充电周期会跳，只有 counter(t) − counter(0) 在单次测试内自洽。
+     */
+    public static double[] counterMah(List<Analyzer.Row> seg, boolean chargeMode) {
+        if (seg == null || seg.size() < 2) return null;
+        int first = -1;
+        for (int i = 0; i < seg.size(); i++) {
+            if (seg.get(i).counter > 0) { first = i; break; }
+        }
+        if (first < 0) return null;
+        double c0 = seg.get(first).counter;
+        double sign = chargeMode ? 1 : -1;
+        double[] out = new double[seg.size()];
+        double last = 0;
+        for (int i = 0; i < seg.size(); i++) {
+            double c = seg.get(i).counter;
+            if (c > 0) last = (c - c0) * sign;
+            out[i] = i < first ? 0 : last;
+        }
+        return out;
+    }
+
+    /** SOC 折算成 mAh 当量，与 counterMah 同轴可比。台阶是 1% = design/100 mAh。 */
+    public static double[] socMah(List<Analyzer.Row> seg, double designMah,
+                                  boolean chargeMode) {
+        if (seg == null || seg.size() < 2 || designMah <= 0) return null;
+        double s0 = seg.get(0).soc;
+        double sign = chargeMode ? 1 : -1;
+        double[] out = new double[seg.size()];
+        for (int i = 0; i < seg.size(); i++) {
+            out[i] = (seg.get(i).soc - s0) * designMah / 100.0 * sign;
+        }
+        return out;
+    }
+
+    /** 库仑计滑动差分电流的结果：窗口终点时间（小时）与电流（mA）。 */
+    public static class CurrentSeries {
+        public double[] tHours = new double[0];
+        /** 库仑计差分电流（基准） */
+        public double[] ma = new double[0];
+        /** 同一窗口内 CURRENT_NOW 的平均绝对值，用来和上面那条线比偏差 */
+        public double[] readingMa = new double[0];
+    }
+
+    /**
+     * 由库仑计差分反推电流 —— 这条路径不带 CURRENT_NOW 那个 16% 的比例偏差。
+     *
+     * 窗口不能短：counter 分辨率 1 mAh，5 秒差分一次就是 720 mA 的量化台阶
+     * （真机上相对误差 21%，曲线没法看）；2 分钟窗口量化台阶降到 30 mA（0.9%）。
+     * 窗口也不跨空档 —— 空档期间没有点，拿两端 counter 平均会把电荷摊平。
+     */
+    public static CurrentSeries counterCurrent(List<Analyzer.Row> seg, double windowS) {
+        CurrentSeries out = new CurrentSeries();
+        if (seg == null || seg.size() < 4 || windowS <= 0) return out;
+        double t0 = seg.get(0).t;
+        List<Double> ts = new ArrayList<>();
+        List<Double> ma = new ArrayList<>();
+        List<Double> readings = new ArrayList<>();
+        int i = 0;
+        while (i < seg.size() - 1) {
+            int j = i + 1;
+            while (j < seg.size() && seg.get(j).t - seg.get(i).t < windowS) j++;
+            if (j >= seg.size()) break;
+            // 窗口内只要有一处空档就整段跳过，从空档后重新起窗。
+            // 不能只看 while 结束那一刻 —— 窗口中间照样可能藏几小时空档。
+            int gapAt = -1;
+            for (int k = i + 1; k <= j; k++) {
+                if (seg.get(k).t - seg.get(k - 1).t > SPLIT_GAP_S) { gapAt = k; break; }
+            }
+            if (gapAt > 0) { i = gapAt; continue; }
+            double dt = seg.get(j).t - seg.get(i).t;
+            double dcc = Math.abs(seg.get(j).counter - seg.get(i).counter);
+            if (dt > 0 && dcc >= 1) {
+                ts.add((seg.get(j).t - t0) / 3600.0);
+                ma.add(dcc * 3600.0 / dt);
+                double sum = 0;
+                for (int k = i; k <= j; k++) sum += Math.abs(seg.get(k).current);
+                readings.add(sum / (j - i + 1));
+            }
+            i = j;
+        }
+        out.tHours = new double[ts.size()];
+        out.ma = new double[ma.size()];
+        out.readingMa = new double[readings.size()];
+        for (int k = 0; k < ts.size(); k++) {
+            out.tHours[k] = ts.get(k);
+            out.ma[k] = ma.get(k);
+            out.readingMa[k] = readings.get(k);
+        }
+        return out;
+    }
+
     /**
      * 带抖动处理的整体拟合。
      *
